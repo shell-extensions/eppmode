@@ -22,6 +22,12 @@ const TEXT_DECODER = new TextDecoder('utf-8');
 // hotspot's own row instead — same row, not the next one. loadshed positions
 // itself independently to 7 (right column of this same row).
 const EPP_POSITION = 6;
+// Immediately before EPP_POSITION in reading order (one row up, beside
+// hotspot). Bluetooth is a native Shell toggle, not an extension — it has no
+// way to pin its own position, so we place it here as a side effect of our
+// own reorder instead of leaving it to drift wherever hotspot/epp-modes/
+// loadshed's independent absolute-index reorders happen to push it.
+const BLUETOOTH_POSITION = 5;
 
 // Icon names match GNOME's own PROFILE_PARAMS in ui/status/powerProfiles.js,
 // so our modes visually line up with the native power-saver/performance icons.
@@ -428,6 +434,19 @@ class EppIndicator extends QuickSettings.SystemIndicator {
         GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => this._reorderToggle());
     }
 
+    // Same shape as _powerProfiles (both are SystemIndicator-derived native
+    // toggles, guarded by Config.HAVE_BLUETOOTH in ui/panel.js) — best-effort,
+    // wrapped in try/catch, may legitimately be absent on Bluetooth-less
+    // hardware.
+    _findBluetoothToggle() {
+        try {
+            return Main.panel?.statusArea?.quickSettings?._bluetooth?.quickSettingsItems?.[0] ?? null;
+        } catch (error) {
+            console.error('EPP Power Modes: could not locate native Bluetooth toggle for positioning', error);
+            return null;
+        }
+    }
+
     _reorderToggle() {
         const grid = Main.panel?.statusArea?.quickSettings?.menu?._grid;
         if (!grid?.get_children)
@@ -438,20 +457,30 @@ class EppIndicator extends QuickSettings.SystemIndicator {
             child instanceof QuickSettings.QuickMenuToggle);
 
         const ourToggle = this.quickSettingsItems[0];
-        const currentIndex = toggles.indexOf(ourToggle);
-        if (currentIndex === -1)
+        if (toggles.indexOf(ourToggle) === -1)
             return GLib.SOURCE_REMOVE;
 
-        const desired = Math.min(Math.max(0, EPP_POSITION), toggles.length - 1);
-        if (desired !== currentIndex) {
-            toggles.splice(currentIndex, 1);
-            toggles.splice(desired, 0, ourToggle);
+        const bluetoothToggle = this._findBluetoothToggle();
 
-            let last = null;
-            for (const item of toggles) {
-                grid.set_child_above_sibling(item, last);
-                last = item;
-            }
+        // Bluetooth is native, not an extension - it can't pin its own
+        // position, so we place it as a side effect of our own reorder:
+        // pull both out, reinsert together right before us.
+        const rest = toggles.filter(t => t !== ourToggle && t !== bluetoothToggle);
+        const insertAt = Math.min(
+            Math.max(0, bluetoothToggle ? BLUETOOTH_POSITION : EPP_POSITION),
+            rest.length);
+
+        const newOrder = [
+            ...rest.slice(0, insertAt),
+            ...(bluetoothToggle ? [bluetoothToggle] : []),
+            ourToggle,
+            ...rest.slice(insertAt),
+        ];
+
+        let last = null;
+        for (const item of newOrder) {
+            grid.set_child_above_sibling(item, last);
+            last = item;
         }
 
         return GLib.SOURCE_REMOVE;
