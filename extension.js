@@ -17,6 +17,12 @@ const STATE_FILE_NAME = 'state';
 const STATE_FILE_PATH = `${STATE_DIR_PATH}/${STATE_FILE_NAME}`;
 const TEXT_DECODER = new TextDecoder('utf-8');
 
+const HOTSPOT_UUID = 'hotspot@yurij.de';
+const LOADSHED_UUID = 'loadshed@yurij.de';
+// One below hotspot's own TARGET_POSITION=4, used only if hotspot's toggle
+// can't be located (not installed/enabled, or its internals changed shape).
+const FALLBACK_POSITION = 5;
+
 // Icon names match GNOME's own PROFILE_PARAMS in ui/status/powerProfiles.js,
 // so our modes visually line up with the native power-saver/performance icons.
 const MODES = [
@@ -414,12 +420,77 @@ class EppIndicator extends QuickSettings.SystemIndicator {
         this._indicator.icon_name = 'power-profile-balanced-symbolic';
         this.quickSettingsItems.push(new EppMenu(this._indicator));
     }
+
+    moveToDefaultPosition() {
+        // Slightly lower priority (higher number) than hotspot's own
+        // GLib.PRIORITY_DEFAULT_IDLE callback, so ours tends to run after
+        // hotspot's reorder within the same mainloop pass. Reduces the race
+        // between two independently-enabled extensions, doesn't eliminate it.
+        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE + 10, () => this._reorderToggle());
+    }
+
+    // Looks up another extension's live toggle via the sanctioned
+    // cross-extension API (Extension.lookupByUUID). Reaching into its
+    // _indicator/_toggle fields is coupled to that extension's own internal
+    // naming (both hotspot and loadshed happen to share the same
+    // Indicator/_toggle shape), so this is best-effort — wrapped in
+    // try/catch, same spirit as hiding the native power-profile toggle.
+    _findSiblingToggle(uuid) {
+        try {
+            return Extension.lookupByUUID(uuid)?.stateObj?._indicator?._toggle ?? null;
+        } catch (error) {
+            console.error(`EPP Power Modes: could not locate ${uuid} toggle for positioning`, error);
+            return null;
+        }
+    }
+
+    _reorderToggle() {
+        const grid = Main.panel?.statusArea?.quickSettings?.menu?._grid;
+        if (!grid?.get_children)
+            return GLib.SOURCE_REMOVE;
+
+        const toggles = grid.get_children().filter(child =>
+            child instanceof QuickSettings.QuickToggle ||
+            child instanceof QuickSettings.QuickMenuToggle);
+
+        const ourToggle = this.quickSettingsItems[0];
+        if (toggles.indexOf(ourToggle) === -1)
+            return GLib.SOURCE_REMOVE;
+
+        const hotspotToggle = this._findSiblingToggle(HOTSPOT_UUID);
+        const loadshedToggle = this._findSiblingToggle(LOADSHED_UUID);
+
+        // Pull both our own toggle and loadshed's out of their current spots,
+        // then reinsert us right after hotspot (or FALLBACK_POSITION if
+        // hotspot isn't found) with loadshed immediately to our right.
+        const rest = toggles.filter(t => t !== ourToggle && t !== loadshedToggle);
+        const hotspotRestIndex = hotspotToggle ? rest.indexOf(hotspotToggle) : -1;
+        const insertAt = Math.min(
+            Math.max(0, hotspotRestIndex !== -1 ? hotspotRestIndex + 1 : FALLBACK_POSITION),
+            rest.length);
+
+        const newOrder = [
+            ...rest.slice(0, insertAt),
+            ourToggle,
+            ...(loadshedToggle ? [loadshedToggle] : []),
+            ...rest.slice(insertAt),
+        ];
+
+        let last = null;
+        for (const item of newOrder) {
+            grid.set_child_above_sibling(item, last);
+            last = item;
+        }
+
+        return GLib.SOURCE_REMOVE;
+    }
 });
 
 export default class EppModesExtension extends Extension {
     enable() {
         this._indicator = new EppIndicator();
         Main.panel.statusArea.quickSettings.addExternalIndicator(this._indicator);
+        this._indicator.moveToDefaultPosition();
 
         // Best-effort: hide GNOME's own power-profile toggle so the two
         // controllers don't visually compete. Never a hard requirement —
