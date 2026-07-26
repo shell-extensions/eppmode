@@ -12,7 +12,9 @@ import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import { Extension, gettext as _, pgettext } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const HELPER_PATH = '/usr/local/bin/epp-modes-helper';
-const STATE_FILE_PATH = '/var/lib/epp-modes/state';
+const STATE_DIR_PATH = '/var/lib/epp-modes';
+const STATE_FILE_NAME = 'state';
+const STATE_FILE_PATH = `${STATE_DIR_PATH}/${STATE_FILE_NAME}`;
 const TEXT_DECODER = new TextDecoder('utf-8');
 
 // Icon names match GNOME's own PROFILE_PARAMS in ui/status/powerProfiles.js,
@@ -104,6 +106,17 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
 
         this._busy = false;
         this._monitor = null;
+        this._monitorChangedId = 0;
+        this._refreshSourceId = 0;
+        this._appliedId = undefined;
+        this._previousId = null;
+        this._lastChangeWasClick = false;
+
+        this._clickedId = this.connect('clicked', () => this._cycleMode());
+        this._menuOpenId = this.menu.connect('open-state-changed', (menu, isOpen) => {
+            if (isOpen)
+                this._refreshFromStateFile();
+        });
 
         this._startStateMonitor();
         this._refreshFromStateFile();
@@ -217,20 +230,49 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
 
     _startStateMonitor() {
         try {
-            const file = Gio.File.new_for_path(STATE_FILE_PATH);
-            this._monitor = file.monitor_file(Gio.FileMonitorFlags.NONE, null);
-            this._monitorChangedId = this._monitor.connect('changed', () => this._refreshFromStateFile());
+            // The helper writes the state file atomically (mktemp + mv -f,
+            // tools/epp-modes-helper), replacing the inode at STATE_FILE_PATH
+            // on every write — a monitor_file() watch on the single file
+            // typically loses its binding after the first such rename.
+            // Watch the directory instead and filter on the basename (it also
+            // contains .lock, touched on every helper call, and .state.XXXXXX
+            // from mktemp).
+            const dir = Gio.File.new_for_path(STATE_DIR_PATH);
+            this._monitor = dir.monitor_directory(Gio.FileMonitorFlags.WATCH_MOVES, null);
+            this._monitor.set_rate_limit(0);
+            this._monitorChangedId = this._monitor.connect('changed', (monitor, file, otherFile) => {
+                const isStateFile = f => f?.get_basename() === STATE_FILE_NAME;
+                if (!isStateFile(file) && !isStateFile(otherFile))
+                    return;
+                this._queueRefresh();
+            });
         } catch (error) {
-            console.error('EPP Power Modes: could not watch state file', error);
+            console.error('EPP Power Modes: could not watch state directory', error);
         }
+    }
+
+    // A single mv can surface as several events depending on the GIO backend
+    // (RENAMED, or DELETED+CREATED+CHANGES_DONE_HINT) — coalesce into one read.
+    _queueRefresh() {
+        if (this._refreshSourceId)
+            return;
+        this._refreshSourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
+            this._refreshSourceId = 0;
+            this._refreshFromStateFile();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _refreshFromStateFile() {
         const state = this._readStateFile();
-        const applied = state?.APPLIED ?? 'balanced-performance';
-        const locked = state?.LOCK === '1';
-        this._setAppliedMode(applied);
-        this._setLockIndicator(locked);
+        this._setLockIndicator(state?.LOCK === '1');
+        // While our own `set` is in flight the helper has often already
+        // written the target to disk before the promise resolves; skipping
+        // the mode update here avoids a visible flicker back to the old
+        // value. _applyMode()'s own .then()/.catch() reconciles afterwards.
+        if (this._busy)
+            return;
+        this._setAppliedMode(state?.APPLIED ?? 'balanced-performance');
     }
 
     _setLockIndicator(locked) {
@@ -239,31 +281,59 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
         this._lockItem.unblock_signal_handler(this._lockChangedId);
     }
 
-    _setAppliedMode(id) {
+    _setAppliedMode(id, { viaClick = false } = {}) {
         const mode = MODES.find(m => m.id === id) ?? MODES[2];
+
+        // Track what was active immediately before this change, and whether
+        // the change came from a tile click, so _cycleMode() can decide
+        // between "jump back to previous" and "keep cycling forward".
+        // Guarded on `!== undefined` so the very first sync at startup never
+        // records a bogus "previous" state.
+        const changed = this._appliedId !== undefined && this._appliedId !== mode.id;
+        if (changed) {
+            this._previousId = this._appliedId;
+            this._lastChangeWasClick = viaClick;
+        }
+        this._appliedId = mode.id;
+
         for (const [modeId, item] of this._modeItems)
             item._tick.visible = modeId === mode.id;
         this.iconName = mode.icon;
         this._indicator.icon_name = mode.icon;
-        super.subtitle = mode.tileLabel();
+        this.subtitle = mode.tileLabel();
         this.menu.setHeader(mode.icon, 'EPP Power Modes');
+        // Mirror GNOME's own PowerProfilesToggle: highlighted only away from
+        // the balanced middle, i.e. for the two non-balanced extremes.
+        this.checked = mode.id === 'power-saver' || mode.id === 'performance';
     }
 
-    _applyMode(id) {
+    // Click on the tile body: one step forward, wrapping around — unless the
+    // last change came from somewhere else (menu selection, external drift),
+    // in which case the first click jumps back to whatever was active before
+    // that, mirroring GNOME's own PowerProfilesToggle. A second click right
+    // after continues the forward cycle.
+    _cycleMode() {
+        const currentIndex = MODES.findIndex(m => m.id === this._appliedId);
+        const base = currentIndex === -1 ? 0 : currentIndex;
+        const sequentialNext = MODES[(base + 1) % MODES.length].id;
+        const target = this._lastChangeWasClick ? sequentialNext : (this._previousId ?? sequentialNext);
+        this._applyMode(target, { viaClick: true });
+    }
+
+    _applyMode(id, { viaClick = false } = {}) {
         if (this._busy)
             return;
         this._busy = true;
-        const previous = this._readStateFile()?.APPLIED ?? 'balanced-performance';
 
         this._runHelperCommand(['set', id]).then(() => {
-            this._setAppliedMode(id);
             this._busy = false;
+            this._setAppliedMode(id, { viaClick });
         }).catch(error => {
+            this._busy = false;
             if (!error?.handled)
                 Main.notify(_('Error'), _('Could not apply the power mode.'));
             console.error('EPP Power Modes: error applying mode', error);
-            this._setAppliedMode(previous);
-            this._busy = false;
+            this._refreshFromStateFile();
         });
     }
 
@@ -313,11 +383,25 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
     }
 
     destroy() {
-        if (this._monitor && this._monitorChangedId) {
-            this._monitor.disconnect(this._monitorChangedId);
-            this._monitor.cancel();
+        if (this._refreshSourceId) {
+            GLib.Source.remove(this._refreshSourceId);
+            this._refreshSourceId = 0;
         }
-        this._monitor = null;
+        if (this._clickedId) {
+            this.disconnect(this._clickedId);
+            this._clickedId = 0;
+        }
+        if (this._menuOpenId) {
+            this.menu.disconnect(this._menuOpenId);
+            this._menuOpenId = 0;
+        }
+        if (this._monitor) {
+            if (this._monitorChangedId)
+                this._monitor.disconnect(this._monitorChangedId);
+            this._monitor.cancel();
+            this._monitor = null;
+            this._monitorChangedId = 0;
+        }
         super.destroy();
     }
 });
@@ -348,6 +432,9 @@ export default class EppModesExtension extends Extension {
                 native.visible = false;
                 for (const item of native.quickSettingsItems)
                     item.visible = false;
+                console.error(`EPP Power Modes DEBUG: hid native toggle, quickSettingsItems=${native.quickSettingsItems.length}`);
+            } else {
+                console.error('EPP Power Modes DEBUG: Main.panel.statusArea.quickSettings._powerProfiles is falsy');
             }
         } catch (error) {
             console.error('EPP Power Modes: could not hide native power profile toggle', error);
