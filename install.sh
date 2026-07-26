@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-UUID="epp-modes@yurij.de"
-HELPER_NAME="epp-modes-helper"
+UUID="eppmode@yurij.de"
+HELPER_NAME="eppmode-helper"
 HELPER_INSTALL_PATH="/usr/local/bin/${HELPER_NAME}"
-SUDOERS_FILE="/etc/sudoers.d/epp-modes"
-STATE_DIR="/var/lib/epp-modes"
+SUDOERS_FILE="/etc/sudoers.d/eppmode"
+STATE_DIR="/var/lib/eppmode"
 
 UNITS=(
-  epp-modes-restore.service
-  epp-modes-reassert.service
-  epp-modes-reassert.path
-  epp-modes-reassert.timer
-  epp-modes-battery.service
-  epp-modes-battery.timer
+  eppmode-restore.service
+  eppmode-reassert.service
+  eppmode-reassert.path
+  eppmode-reassert.timer
+  eppmode-battery.service
+  eppmode-battery.timer
 )
-UDEV_RULE="99-epp-modes-power.rules"
+UDEV_RULE="99-eppmode-power.rules"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -92,9 +92,9 @@ if command -v systemctl >/dev/null 2>&1; then
   fi
 
   sudo systemctl daemon-reload
-  sudo systemctl enable --now epp-modes-restore.service
-  sudo systemctl enable --now epp-modes-reassert.path epp-modes-reassert.timer
-  sudo systemctl enable --now epp-modes-battery.timer
+  sudo systemctl enable --now eppmode-restore.service
+  sudo systemctl enable --now eppmode-reassert.path eppmode-reassert.timer
+  sudo systemctl enable --now eppmode-battery.timer
 else
   echo "systemctl not found; skipping systemd unit install." >&2
 fi

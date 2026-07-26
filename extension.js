@@ -11,8 +11,8 @@ import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 
 import { Extension, InjectionManager, gettext as _, pgettext } from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const HELPER_PATH = '/usr/local/bin/epp-modes-helper';
-const STATE_DIR_PATH = '/var/lib/epp-modes';
+const HELPER_PATH = '/usr/local/bin/eppmode-helper';
+const STATE_DIR_PATH = '/var/lib/eppmode';
 const STATE_FILE_NAME = 'state';
 const STATE_FILE_PATH = `${STATE_DIR_PATH}/${STATE_FILE_NAME}`;
 const TEXT_DECODER = new TextDecoder('utf-8');
@@ -25,7 +25,7 @@ const EPP_POSITION = 6;
 // Immediately before EPP_POSITION in reading order (one row up, beside
 // hotspot). Bluetooth is a native Shell toggle, not an extension — it has no
 // way to pin its own position, so we place it here as a side effect of our
-// own reorder instead of leaving it to drift wherever hotspot/epp-modes/
+// own reorder instead of leaving it to drift wherever hotspot/eppmode/
 // loadshed's independent absolute-index reorders happen to push it.
 const BLUETOOTH_POSITION = 5;
 
@@ -243,7 +243,7 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
     _startStateMonitor() {
         try {
             // The helper writes the state file atomically (mktemp + mv -f,
-            // tools/epp-modes-helper), replacing the inode at STATE_FILE_PATH
+            // tools/eppmode-helper), replacing the inode at STATE_FILE_PATH
             // on every write — a monitor_file() watch on the single file
             // typically loses its binding after the first such rename.
             // Watch the directory instead and filter on the basename (it also
@@ -386,7 +386,7 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
 
         addLabel(_('This extension needs root access to control the CPU energy-performance-preference.'), STYLE_TITLE);
         addLabel(_('Run the install script once:'), STYLE_TEXT);
-        addCode('bash $HOME/.local/share/gnome-shell/extensions/epp-modes@yurij.de/install.sh');
+        addCode('bash $HOME/.local/share/gnome-shell/extensions/eppmode@yurij.de/install.sh');
         addLabel(_('Then restart GNOME Shell or disable/enable the extension.'), STYLE_TEXT);
 
         dialog.contentLayout.add_child(box);

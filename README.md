@@ -25,9 +25,9 @@ see `PLAN.md` for the full design rationale.
 bash install.sh
 ```
 
-Installs a root helper to `/usr/local/bin/epp-modes-helper`, a
+Installs a root helper to `/usr/local/bin/eppmode-helper`, a
 passwordless sudoers rule scoped to that single binary
-(`/etc/sudoers.d/epp-modes`), and systemd units for boot restore, lock
+(`/etc/sudoers.d/eppmode`), and systemd units for boot restore, lock
 drift-reassertion and the battery safety-net poll. Requires `sudo`.
 
 ## Uninstall
@@ -40,12 +40,12 @@ Removes the helper, sudoers rule, systemd units, udev rule and state
 directory. Remove the GNOME Shell extension itself separately, e.g.:
 
 ```sh
-gnome-extensions uninstall epp-modes@yurij.de
+gnome-extensions uninstall eppmode@yurij.de
 ```
 
 ## Translations
 
-English (source), German and Spanish. To regenerate `po/epp-modes.pot`
+English (source), German and Spanish. To regenerate `po/eppmode.pot`
 and rebuild the compiled `.mo` files after editing `extension.js` or a
 `.po` file:
 

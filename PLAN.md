@@ -60,10 +60,10 @@ Alle Kernentscheidungen wurden mit dem Nutzer über mehrere Rückfragen abgestim
 
 ### Repo-Layout
 
-Repo: `github.com/shell-extensions/epp-modes`, UUID `epp-modes@yurij.de`. Anzeigename „EPP Power Modes" — über „Power" auf extensions.gnome.org auffindbar, über „EPP" eindeutig (Kollisionsprüfung: `epp` liefert dort und auf GitHub 0 Treffer; `power modes`/`power profile` sind beide dicht belegt, u.a. `voidbert/powermodes`).
+Repo: `github.com/shell-extensions/eppmode`, UUID `eppmode@yurij.de`. Anzeigename „EPP Power Modes" — über „Power" auf extensions.gnome.org auffindbar, über „EPP" eindeutig (Kollisionsprüfung: `epp` liefert dort und auf GitHub 0 Treffer; `power modes`/`power profile` sind beide dicht belegt, u.a. `voidbert/powermodes`).
 
 ```
-epp-modes/
+eppmode/
 ├── metadata.json            # uuid, shell-version ["46","47","48","49"], gettext-domain; KEIN settings-schema
 ├── extension.js             # Indicator + 4-State-QuickMenuToggle + Lock-Switch + Native-Hide + FileMonitor
 ├── install.sh                # Kandidaten-Pfadsuche (user+system-wide), Helper/Sudoers/Units installieren
@@ -71,21 +71,21 @@ epp-modes/
 ├── README.md
 ├── LICENSE
 ├── po/
-│   ├── epp-modes.pot        # aus extension.js via xgettext
+│   ├── eppmode.pot        # aus extension.js via xgettext
 │   ├── de.po
 │   └── es.po
 ├── locale/                  # aus po/ gebaut (msgfmt), eingecheckt fürs EGO-ZIP
-│   ├── de/LC_MESSAGES/epp-modes.mo
-│   └── es/LC_MESSAGES/epp-modes.mo
+│   ├── de/LC_MESSAGES/eppmode.mo
+│   └── es/LC_MESSAGES/eppmode.mo
 └── tools/
-    ├── epp-modes-helper                # root bash: set|lock|unlock|reassert|battery-check|restore|status
-    ├── epp-modes-restore.service        # oneshot Boot-Restore
-    ├── epp-modes-reassert.service       # oneshot: helper reassert (Lock-Drift-Durchsetzung)
-    ├── epp-modes-reassert.path          # PathChanged=/sys/firmware/acpi/platform_profile
-    ├── epp-modes-reassert.timer         # 10s Backstop
-    ├── epp-modes-battery.service        # oneshot: helper battery-check
-    ├── epp-modes-battery.timer          # 60s Poll
-    ├── 99-epp-modes-power.rules         # udev: power_supply change → battery.service sofort
+    ├── eppmode-helper                # root bash: set|lock|unlock|reassert|battery-check|restore|status
+    ├── eppmode-restore.service        # oneshot Boot-Restore
+    ├── eppmode-reassert.service       # oneshot: helper reassert (Lock-Drift-Durchsetzung)
+    ├── eppmode-reassert.path          # PathChanged=/sys/firmware/acpi/platform_profile
+    ├── eppmode-reassert.timer         # 10s Backstop
+    ├── eppmode-battery.service        # oneshot: helper battery-check
+    ├── eppmode-battery.timer          # 60s Poll
+    ├── 99-eppmode-power.rules         # udev: power_supply change → battery.service sofort
     └── build-locale.sh                  # xgettext + msgmerge + msgfmt, idempotent
 ```
 
@@ -93,7 +93,7 @@ epp-modes/
 
 ### State-Modell
 
-Root-State-File `/var/lib/epp-modes/state` (`0644`, key=value):
+Root-State-File `/var/lib/eppmode/state` (`0644`, key=value):
 ```
 SELECTED=balanced-performance   # zuletzt vom Nutzer explizit gewählter Zustand (Restore-Ziel)
 APPLIED=balanced-performance    # aktuell tatsächlich gesetztes EPP
@@ -113,15 +113,15 @@ Hardware-Schreiblogik direkt aus `src/ppd-epp-override` übernommen: EPP-Schreib
 
 ### Privilegien-Brücke
 
-1:1 das `thinkpad-red-led`-Muster: `install.sh` schreibt `/etc/sudoers.d/epp-modes` (`<user> ALL=(root) NOPASSWD: /usr/local/bin/epp-modes-helper`, validiert mit `visudo -c -f`); Extension ruft `GLib.spawn_async_with_pipes(['sudo','-n','/usr/local/bin/epp-modes-helper', ...args])` mit derselben `_isAuthError`/Setup-Dialog-Fallback-Logik wie in `thinkpad-red-led/extension.js:152-224`.
+1:1 das `thinkpad-red-led`-Muster: `install.sh` schreibt `/etc/sudoers.d/eppmode` (`<user> ALL=(root) NOPASSWD: /usr/local/bin/eppmode-helper`, validiert mit `visudo -c -f`); Extension ruft `GLib.spawn_async_with_pipes(['sudo','-n','/usr/local/bin/eppmode-helper', ...args])` mit derselben `_isAuthError`/Setup-Dialog-Fallback-Logik wie in `thinkpad-red-led/extension.js:152-224`.
 
 ### Drift-Reassertion (Lock-Durchsetzung)
 
-Einzige realistische Drift-Quelle nach Wegfall von `power-profiles-daemon`: Firmware/ACPI-Hotkeys, die `/sys/firmware/acpi/platform_profile` direkt ändern. Wiederverwendung des bewährten Path+Timer-Musters aus `power-saver-epp-fix/systemd/ppd-epp-override.{path,timer}` — `PathChanged=/sys/firmware/acpi/platform_profile` löst `epp-modes-reassert.service` aus, ein 10s-Timer ist Backstop für Fälle ohne Datei-Änderungsereignis. Die Durchsetzung selbst passiert im Helper (`reassert` prüft `LOCK`), nicht durch Enable/Disable der Units — die Extension braucht dadurch keine `systemctl`-Rechte.
+Einzige realistische Drift-Quelle nach Wegfall von `power-profiles-daemon`: Firmware/ACPI-Hotkeys, die `/sys/firmware/acpi/platform_profile` direkt ändern. Wiederverwendung des bewährten Path+Timer-Musters aus `power-saver-epp-fix/systemd/ppd-epp-override.{path,timer}` — `PathChanged=/sys/firmware/acpi/platform_profile` löst `eppmode-reassert.service` aus, ein 10s-Timer ist Backstop für Fälle ohne Datei-Änderungsereignis. Die Durchsetzung selbst passiert im Helper (`reassert` prüft `LOCK`), nicht durch Enable/Disable der Units — die Extension braucht dadurch keine `systemctl`-Rechte.
 
 ### Akku-Sicherheitsnetz
 
-Root-seitig, Poll-basiert (kein Dauerprozess, kein GJS-D-Bus-Abo nötig): `epp-modes-battery.timer` alle 60s + `99-epp-modes-power.rules` (udev `power_supply`-`change` → sofortiger `battery-check`) für schnelle Reaktion bei Netzstecker-Ereignissen. Root-seitig statt in der Extension, damit es GNOME-Shell-Neustarts/Extension-Deaktivierung übersteht — dieselbe Robustheits-Überlegung wie beim `power-profiles-daemon`-Bypass insgesamt.
+Root-seitig, Poll-basiert (kein Dauerprozess, kein GJS-D-Bus-Abo nötig): `eppmode-battery.timer` alle 60s + `99-eppmode-power.rules` (udev `power_supply`-`change` → sofortiger `battery-check`) für schnelle Reaktion bei Netzstecker-Ereignissen. Root-seitig statt in der Extension, damit es GNOME-Shell-Neustarts/Extension-Deaktivierung übersteht — dieselbe Robustheits-Überlegung wie beim `power-profiles-daemon`-Bypass insgesamt.
 
 ### UI + natives Toggle verstecken
 
@@ -157,7 +157,7 @@ pgettext('power mode', 'Performance')    // Menü, volle Form
 pgettext('tile subtitle', 'Performance') // Kachel, ≤ 14 Zeichen
 ```
 
-In `de.po`/`es.po` als Kommentar festhalten, dass Strings mit Kontext `tile subtitle` die 14-Zeichen-Grenze einhalten müssen — sonst reproduziert eine spätere Übersetzung den Abschneide-Fehler, der diese Beschriftungsrunde ausgelöst hat. `tools/build-locale.sh` erzeugt `po/epp-modes.pot` per `xgettext` aus `extension.js`, merged per `msgmerge` in `de.po`/`es.po` und baut per `msgfmt` die `.mo`-Dateien nach `locale/`.
+In `de.po`/`es.po` als Kommentar festhalten, dass Strings mit Kontext `tile subtitle` die 14-Zeichen-Grenze einhalten müssen — sonst reproduziert eine spätere Übersetzung den Abschneide-Fehler, der diese Beschriftungsrunde ausgelöst hat. `tools/build-locale.sh` erzeugt `po/eppmode.pot` per `xgettext` aus `extension.js`, merged per `msgmerge` in `de.po`/`es.po` und baut per `msgfmt` die `.mo`-Dateien nach `locale/`.
 
 ### install.sh / uninstall.sh
 
@@ -171,13 +171,13 @@ In `de.po`/`es.po` als Kommentar festhalten, dass Strings mit Kontext `tile subt
 
 Auf einem echten GNOME-46/Ubuntu-24.04/`intel_pstate`-Gerät:
 
-1. Install: `epp-modes-helper status` prüfen, `systemctl is-enabled` für Path/Timer/Restore.
+1. Install: `eppmode-helper status` prüfen, `systemctl is-enabled` für Path/Timer/Restore.
 2. Alle 4 Zustände durchklicken, `energy_performance_preference` (alle CPUs) + `platform_profile` gegen die Tabelle prüfen; Menü-Label und Kachel-Untertitel in allen drei Sprachen (`LANG=de_DE.UTF-8`, `LANG=es_ES.UTF-8`, `LANG=en_US.UTF-8`) auf korrekten Text und fehlende Abschneidung prüfen.
 3. Natives Toggle-Verstecken verifizieren: Property-Existenz per `gresource extract /usr/lib/gnome-shell/libshell-14.so /org/gnome/shell/ui/panel.js` gegen die jeweils installierte Shell-Version prüfen, dann Fallback testen, indem der Property-Name testweise falsch gesetzt wird — beide Toggles müssen sichtbar bleiben.
 3b. Energieeinstellungen-Link: Klick öffnet `gnome-control-center power`, Quick-Settings-Menü schließt sich; Eintrag ist am Sperrbildschirm (`allowSettings=false`) ausgeblendet.
-4. Lock + simulierte Drift: ohne Lock `platform_profile` manuell umschreiben → bleibt (kein Revert). Mit Lock → wird innerhalb ~1s zurückgesetzt (`journalctl -u epp-modes-reassert.service`).
-5. Akku-Sicherheitsnetz ohne echtes Leerlaufen: `FAKE_PERCENT`/`FAKE_STATE`-Env-Var-Hook in `battery-check` für Tests (z.B. `sudo FAKE_STATE=discharging FAKE_PERCENT=15 epp-modes-helper battery-check` → `SAFETY=1`, `APPLIED=balanced-powersave`; danach `FAKE_STATE=charging FAKE_PERCENT=50` → Restore auf `SELECTED`). Zusätzlich: manueller Klick während aktivem Sicherheitsnetz muss sofort greifen.
-6. Persistenz: Zustand wählen, GNOME Shell neu starten → Toggle zeigt gespeicherten Zustand. Neustart → `epp-modes-restore.service` wendet `APPLIED` an, `battery-check` korrigiert bei Bedarf selbst.
+4. Lock + simulierte Drift: ohne Lock `platform_profile` manuell umschreiben → bleibt (kein Revert). Mit Lock → wird innerhalb ~1s zurückgesetzt (`journalctl -u eppmode-reassert.service`).
+5. Akku-Sicherheitsnetz ohne echtes Leerlaufen: `FAKE_PERCENT`/`FAKE_STATE`-Env-Var-Hook in `battery-check` für Tests (z.B. `sudo FAKE_STATE=discharging FAKE_PERCENT=15 eppmode-helper battery-check` → `SAFETY=1`, `APPLIED=balanced-powersave`; danach `FAKE_STATE=charging FAKE_PERCENT=50` → Restore auf `SELECTED`). Zusätzlich: manueller Klick während aktivem Sicherheitsnetz muss sofort greifen.
+6. Persistenz: Zustand wählen, GNOME Shell neu starten → Toggle zeigt gespeicherten Zustand. Neustart → `eppmode-restore.service` wendet `APPLIED` an, `battery-check` korrigiert bei Bedarf selbst.
 
 ## Kritische Dateien als Vorlage
 

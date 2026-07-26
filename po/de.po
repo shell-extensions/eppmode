@@ -1,6 +1,6 @@
-# German translations for epp-modes package.
+# German translations for eppmode package.
 # Copyright (C) 2026 EPP Power Modes contributors
-# This file is distributed under the same license as the epp-modes package.
+# This file is distributed under the same license as the eppmode package.
 #
 # Strings with msgctxt "tile subtitle" are shown in the Quick Settings tile
 # and get truncated above ~14 characters — keep translations at or below
@@ -9,7 +9,7 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: epp-modes 1\n"
+"Project-Id-Version: eppmode 1\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-07-26 22:49+0200\n"
 "PO-Revision-Date: 2026-07-26 22:49+0200\n"
