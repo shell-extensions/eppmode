@@ -3,4 +3,4 @@ Description=EPP Power Modes battery safety net check
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/epp-modes-helper battery-check
+ExecStart=/usr/local/bin/eppmode-helper battery-check

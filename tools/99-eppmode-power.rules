@@ -1,1 +1,1 @@
-SUBSYSTEM=="power_supply", ACTION=="change", RUN+="/usr/bin/systemctl --no-block start epp-modes-battery.service"
+SUBSYSTEM=="power_supply", ACTION=="change", RUN+="/usr/bin/systemctl --no-block start eppmode-battery.service"

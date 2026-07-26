@@ -3,7 +3,7 @@ Description=Restore EPP Power Modes state on boot
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/epp-modes-helper restore
+ExecStart=/usr/local/bin/eppmode-helper restore
 
 [Install]
 WantedBy=multi-user.target

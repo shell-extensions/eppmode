@@ -5,7 +5,7 @@ Description=Periodic EPP Power Modes battery safety net check
 OnBootSec=30s
 OnUnitActiveSec=60s
 AccuracySec=5s
-Unit=epp-modes-battery.service
+Unit=eppmode-battery.service
 
 [Install]
 WantedBy=timers.target

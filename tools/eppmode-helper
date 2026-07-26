@@ -1,9 +1,9 @@
 #!/bin/sh
-# Root helper for EPP Power Modes. Installed to /usr/local/bin/epp-modes-helper
+# Root helper for EPP Power Modes. Installed to /usr/local/bin/eppmode-helper
 # and invoked via passwordless sudo from the GNOME Shell extension.
 set -eu
 
-STATE_DIR=/var/lib/epp-modes
+STATE_DIR=/var/lib/eppmode
 STATE_FILE="$STATE_DIR/state"
 LOCK_FILE="$STATE_DIR/.lock"
 
@@ -16,7 +16,7 @@ require_root() {
 
 usage() {
 	cat <<'EOF'
-Usage: epp-modes-helper <command> [args]
+Usage: eppmode-helper <command> [args]
 
 Commands:
   set <state>      Apply one of the four fixed modes immediately.
@@ -76,7 +76,7 @@ apply_epp() {
 	if [ -n "$available_file" ]; then
 		available="$(cat "$available_file")"
 		if ! has_word "$available" "$target_epp"; then
-			logger -t epp-modes "EPP preference '$target_epp' is not available: $available"
+			logger -t eppmode "EPP preference '$target_epp' is not available: $available"
 			return 0
 		fi
 	fi
@@ -86,7 +86,7 @@ apply_epp() {
 		current="$(cat "$f" 2>/dev/null || true)"
 		if [ "$current" != "$target_epp" ]; then
 			printf '%s\n' "$target_epp" > "$f" 2>/dev/null || \
-				logger -t epp-modes "Failed to set $f to $target_epp"
+				logger -t eppmode "Failed to set $f to $target_epp"
 		fi
 	done
 }
@@ -101,14 +101,14 @@ apply_platform_profile() {
 	target_platform="$(mode_platform_profile "$1")"
 	choices="$(cat "$platform_profile_choices_file" 2>/dev/null || true)"
 	if ! has_word "$choices" "$target_platform"; then
-		logger -t epp-modes "platform_profile '$target_platform' is not available: $choices"
+		logger -t eppmode "platform_profile '$target_platform' is not available: $choices"
 		return 0
 	fi
 
 	current_platform="$(cat "$platform_profile_file" 2>/dev/null || true)"
 	if [ "$current_platform" != "$target_platform" ]; then
 		printf '%s\n' "$target_platform" > "$platform_profile_file" 2>/dev/null || \
-			logger -t epp-modes "Failed to set platform_profile to $target_platform"
+			logger -t eppmode "Failed to set platform_profile to $target_platform"
 	fi
 }
 

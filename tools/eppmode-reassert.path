@@ -3,7 +3,7 @@ Description=Watch ACPI platform_profile for EPP Power Modes drift
 
 [Path]
 PathChanged=/sys/firmware/acpi/platform_profile
-Unit=epp-modes-reassert.service
+Unit=eppmode-reassert.service
 
 [Install]
 WantedBy=multi-user.target
