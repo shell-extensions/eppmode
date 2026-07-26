@@ -17,10 +17,10 @@ const STATE_FILE_NAME = 'state';
 const STATE_FILE_PATH = `${STATE_DIR_PATH}/${STATE_FILE_NAME}`;
 const TEXT_DECODER = new TextDecoder('utf-8');
 
-const LOADSHED_UUID = 'loadshed@yurij.de';
 // Row directly below hotspot's own fixed TARGET_POSITION=4 (hotspot@yurij.de),
 // left column of a 2-column grid (even index). hotspotIndex+1 (odd) landed in
-// hotspot's own row instead — same row, not the next one.
+// hotspot's own row instead — same row, not the next one. loadshed positions
+// itself independently to 7 (right column of this same row).
 const EPP_POSITION = 6;
 
 // Icon names match GNOME's own PROFILE_PARAMS in ui/status/powerProfiles.js,
@@ -428,20 +428,6 @@ class EppIndicator extends QuickSettings.SystemIndicator {
         GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => this._reorderToggle());
     }
 
-    // Looks up another extension's live toggle via the sanctioned
-    // cross-extension API (Extension.lookupByUUID). Reaching into its
-    // _indicator/_toggle field is coupled to loadshed's own internal naming,
-    // so this is best-effort — wrapped in try/catch, same spirit as hiding
-    // the native power-profile toggle.
-    _findSiblingToggle(uuid) {
-        try {
-            return Extension.lookupByUUID(uuid)?.stateObj?._indicator?._toggle ?? null;
-        } catch (error) {
-            console.error(`EPP Power Modes: could not locate ${uuid} toggle for positioning`, error);
-            return null;
-        }
-    }
-
     _reorderToggle() {
         const grid = Main.panel?.statusArea?.quickSettings?.menu?._grid;
         if (!grid?.get_children)
@@ -452,28 +438,20 @@ class EppIndicator extends QuickSettings.SystemIndicator {
             child instanceof QuickSettings.QuickMenuToggle);
 
         const ourToggle = this.quickSettingsItems[0];
-        if (toggles.indexOf(ourToggle) === -1)
+        const currentIndex = toggles.indexOf(ourToggle);
+        if (currentIndex === -1)
             return GLib.SOURCE_REMOVE;
 
-        const loadshedToggle = this._findSiblingToggle(LOADSHED_UUID);
+        const desired = Math.min(Math.max(0, EPP_POSITION), toggles.length - 1);
+        if (desired !== currentIndex) {
+            toggles.splice(currentIndex, 1);
+            toggles.splice(desired, 0, ourToggle);
 
-        // Pull our own toggle and loadshed's out of their current spots,
-        // then reinsert both together at the fixed target row, loadshed
-        // immediately to our right.
-        const rest = toggles.filter(t => t !== ourToggle && t !== loadshedToggle);
-        const insertAt = Math.min(Math.max(0, EPP_POSITION), rest.length);
-
-        const newOrder = [
-            ...rest.slice(0, insertAt),
-            ourToggle,
-            ...(loadshedToggle ? [loadshedToggle] : []),
-            ...rest.slice(insertAt),
-        ];
-
-        let last = null;
-        for (const item of newOrder) {
-            grid.set_child_above_sibling(item, last);
-            last = item;
+            let last = null;
+            for (const item of toggles) {
+                grid.set_child_above_sibling(item, last);
+                last = item;
+            }
         }
 
         return GLib.SOURCE_REMOVE;
