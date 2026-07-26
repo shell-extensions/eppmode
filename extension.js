@@ -9,7 +9,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as QuickSettings from 'resource:///org/gnome/shell/ui/quickSettings.js';
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 
-import { Extension, gettext as _, pgettext } from 'resource:///org/gnome/shell/extensions/extension.js';
+import { Extension, InjectionManager, gettext as _, pgettext } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const HELPER_PATH = '/usr/local/bin/epp-modes-helper';
 const STATE_DIR_PATH = '/var/lib/epp-modes';
@@ -425,16 +425,34 @@ export default class EppModesExtension extends Extension {
         // controllers don't visually compete. Never a hard requirement —
         // _powerProfiles is an undocumented internal, confirmed present in
         // Shell 46 (ui/panel.js) but not guaranteed to exist in later versions.
+        //
+        // A plain one-shot `visible = false` doesn't stick: the native
+        // toggle's own _sync() unconditionally does
+        // `this.visible = this._proxy.g_name_owner !== null`, and it re-runs
+        // on every 'g-properties-changed' from power-profiles-daemon — which
+        // fires as soon as its own platform_profile driver notices our
+        // helper's direct sysfs writes drift the value. So instead of
+        // fighting that repeatedly, wrap _sync() itself via InjectionManager
+        // (the same mechanism Shell uses internally) to re-assert
+        // visible = false right after every native sync.
         try {
             const native = Main.panel.statusArea.quickSettings._powerProfiles;
             if (native) {
                 this._nativeToggle = native;
+                const [toggle] = native.quickSettingsItems;
+                if (toggle) {
+                    this._injectionManager = new InjectionManager();
+                    this._injectionManager.overrideMethod(
+                        toggle.constructor.prototype, '_sync', originalSync => {
+                            return function () {
+                                originalSync.call(this);
+                                this.visible = false;
+                            };
+                        });
+                }
                 native.visible = false;
                 for (const item of native.quickSettingsItems)
                     item.visible = false;
-                console.error(`EPP Power Modes DEBUG: hid native toggle, quickSettingsItems=${native.quickSettingsItems.length}`);
-            } else {
-                console.error('EPP Power Modes DEBUG: Main.panel.statusArea.quickSettings._powerProfiles is falsy');
             }
         } catch (error) {
             console.error('EPP Power Modes: could not hide native power profile toggle', error);
@@ -442,6 +460,11 @@ export default class EppModesExtension extends Extension {
     }
 
     disable() {
+        if (this._injectionManager) {
+            this._injectionManager.clear();
+            this._injectionManager = null;
+        }
+
         if (this._nativeToggle) {
             this._nativeToggle.visible = true;
             for (const item of this._nativeToggle.quickSettingsItems)
