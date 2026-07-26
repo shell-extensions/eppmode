@@ -1,5 +1,7 @@
 # EPP Power Modes
 
+[**English**](README.md) | [Deutsch](README.de.md) | [Español](README.es.md)
+
 A GNOME Shell (46+) Quick Settings extension for four fixed CPU
 energy-performance-preference (EPP) states, bypassing
 `power-profiles-daemon` entirely:
@@ -17,7 +19,9 @@ forces `Balanced-Saver` below 20% while discharging, unaffected by Lock.
 
 Successor to
 [`power-saver-epp-fix`](https://github.com/shell-extensions/power-saver-epp-fix);
-see `PLAN.md` for the full design rationale.
+see [PLAN.md](PLAN.md) for the full design rationale.
+
+![EPP Power Modes Quick Settings menu in German](image/eppmode-quick-settings.png)
 
 ## Install
 
