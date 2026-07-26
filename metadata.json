@@ -1,0 +1,10 @@
+{
+  "uuid": "epp-modes@shell-extensions.github.io",
+  "name": "EPP Power Modes",
+  "description": "Four fixed CPU energy-performance-preference modes (Power Saver, Balanced-Saver, Balanced-Performance, Performance) with an optional lock against firmware/ACPI drift and a battery safety net. Bypasses power-profiles-daemon entirely via a root helper.\n\nSetup:\nbash $HOME/.local/share/gnome-shell/extensions/epp-modes@shell-extensions.github.io/install.sh",
+  "gettext-domain": "epp-modes",
+  "shell-version": ["46", "47", "48", "49"],
+  "url": "https://github.com/shell-extensions/epp-modes",
+  "version": 1,
+  "license": "GPL-3.0-or-later"
+}

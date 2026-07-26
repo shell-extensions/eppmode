@@ -1,0 +1,112 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR EPP Power Modes contributors
+# This file is distributed under the same license as the epp-modes package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: epp-modes 1\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-07-26 22:50+0200\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: extension.js:24
+msgctxt "power mode"
+msgid "Power Saver"
+msgstr ""
+
+#: extension.js:25
+msgctxt "tile subtitle"
+msgid "Saver"
+msgstr ""
+
+#: extension.js:30
+msgctxt "power mode"
+msgid "Balanced-Saver"
+msgstr ""
+
+#: extension.js:31
+msgctxt "tile subtitle"
+msgid "Balanced −"
+msgstr ""
+
+#: extension.js:36
+msgctxt "power mode"
+msgid "Balanced-Performance"
+msgstr ""
+
+#: extension.js:37
+msgctxt "tile subtitle"
+msgid "Balanced +"
+msgstr ""
+
+#: extension.js:42
+msgctxt "power mode"
+msgid "Performance"
+msgstr ""
+
+#: extension.js:43
+msgctxt "tile subtitle"
+msgid "Performance"
+msgstr ""
+
+#: extension.js:65
+msgid "Power"
+msgstr ""
+
+#: extension.js:98
+msgid "Lock"
+msgstr ""
+
+#: extension.js:103
+msgid "Power Settings"
+msgstr ""
+
+#: extension.js:174
+msgid "Setup required"
+msgstr ""
+
+#: extension.js:174
+msgid "Run the install script once to allow passwordless access to the helper."
+msgstr ""
+
+#: extension.js:180 extension.js:263 extension.js:273
+msgid "Error"
+msgstr ""
+
+#: extension.js:180
+msgid "sudo was not found on this system."
+msgstr ""
+
+#: extension.js:263
+msgid "Could not apply the power mode."
+msgstr ""
+
+#: extension.js:273
+msgid "Could not change the lock state."
+msgstr ""
+
+#: extension.js:305
+msgid ""
+"This extension needs root access to control the CPU energy-performance-"
+"preference."
+msgstr ""
+
+#: extension.js:306
+msgid "Run the install script once:"
+msgstr ""
+
+#: extension.js:308
+msgid "Then restart GNOME Shell or disable/enable the extension."
+msgstr ""
+
+#: extension.js:311
+msgid "Close"
+msgstr ""

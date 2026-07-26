@@ -1,0 +1,116 @@
+# Spanish translations for epp-modes package.
+# Copyright (C) 2026 EPP Power Modes contributors
+# This file is distributed under the same license as the epp-modes package.
+#
+# Strings with msgctxt "tile subtitle" are shown in the Quick Settings tile
+# and get truncated above ~14 characters — keep translations at or below
+# that length. Strings with msgctxt "power mode" appear in the dropdown
+# menu, where more space is available.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: epp-modes 1\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-07-26 22:49+0200\n"
+"PO-Revision-Date: 2026-07-26 22:49+0200\n"
+"Last-Translator: EPP Power Modes contributors\n"
+"Language-Team: Spanish\n"
+"Language: es\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: extension.js:24
+msgctxt "power mode"
+msgid "Power Saver"
+msgstr "Ahorro de energía"
+
+#: extension.js:25
+msgctxt "tile subtitle"
+msgid "Saver"
+msgstr "Ahorro"
+
+#: extension.js:30
+msgctxt "power mode"
+msgid "Balanced-Saver"
+msgstr "Equilibrado-Ahorro"
+
+#: extension.js:31
+msgctxt "tile subtitle"
+msgid "Balanced −"
+msgstr "Equilibrado −"
+
+#: extension.js:36
+msgctxt "power mode"
+msgid "Balanced-Performance"
+msgstr "Equilibrado-Rendimiento"
+
+#: extension.js:37
+msgctxt "tile subtitle"
+msgid "Balanced +"
+msgstr "Equilibrado +"
+
+#: extension.js:42
+msgctxt "power mode"
+msgid "Performance"
+msgstr "Rendimiento"
+
+#: extension.js:43
+msgctxt "tile subtitle"
+msgid "Performance"
+msgstr "Rendimiento"
+
+#: extension.js:65
+msgid "Power"
+msgstr "Energía"
+
+#: extension.js:98
+msgid "Lock"
+msgstr "Bloquear"
+
+#: extension.js:103
+msgid "Power Settings"
+msgstr "Configuración de energía"
+
+#: extension.js:174
+msgid "Setup required"
+msgstr "Configuración necesaria"
+
+#: extension.js:174
+msgid "Run the install script once to allow passwordless access to the helper."
+msgstr "Ejecute el script de instalación una vez para permitir el acceso sin contraseña al ayudante."
+
+#: extension.js:180 extension.js:263 extension.js:273
+msgid "Error"
+msgstr "Error"
+
+#: extension.js:180
+msgid "sudo was not found on this system."
+msgstr "No se encontró sudo en este sistema."
+
+#: extension.js:263
+msgid "Could not apply the power mode."
+msgstr "No se pudo aplicar el modo de energía."
+
+#: extension.js:273
+msgid "Could not change the lock state."
+msgstr "No se pudo cambiar el estado de bloqueo."
+
+#: extension.js:305
+msgid ""
+"This extension needs root access to control the CPU energy-performance-"
+"preference."
+msgstr "Esta extensión necesita acceso root para controlar la preferencia de rendimiento energético de la CPU."
+
+#: extension.js:306
+msgid "Run the install script once:"
+msgstr "Ejecute el script de instalación una vez:"
+
+#: extension.js:308
+msgid "Then restart GNOME Shell or disable/enable the extension."
+msgstr "Luego reinicie GNOME Shell o desactive/active la extensión."
+
+#: extension.js:311
+msgid "Close"
+msgstr "Cerrar"

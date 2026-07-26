@@ -1,6 +1,6 @@
 # EPP Power Modes: GNOME-Shell-Extension als Nachfolger von power-saver-epp-fix
 
-Status: Planungsdokument, Implementierung noch nicht begonnen.
+Status: Implementiert (extension.js, Helper, systemd/udev, install.sh/uninstall.sh, po/locale), noch nicht auf dem System installiert. Dieses Dokument beschreibt weiterhin den Designstand, an dem sich die Implementierung orientiert.
 
 ## Kontext
 

@@ -1,0 +1,251 @@
+#!/bin/sh
+# Root helper for EPP Power Modes. Installed to /usr/local/bin/epp-modes-helper
+# and invoked via passwordless sudo from the GNOME Shell extension.
+set -eu
+
+STATE_DIR=/var/lib/epp-modes
+STATE_FILE="$STATE_DIR/state"
+LOCK_FILE="$STATE_DIR/.lock"
+
+require_root() {
+	if [ "$(id -u)" -ne 0 ]; then
+		echo "This helper must be run as root (via sudo)." >&2
+		exit 1
+	fi
+}
+
+usage() {
+	cat <<'EOF'
+Usage: epp-modes-helper <command> [args]
+
+Commands:
+  set <state>      Apply one of the four fixed modes immediately.
+  lock             Block automatic (drift) changes.
+  unlock           Allow automatic changes again.
+  reassert         No-op unless locked; re-applies APPLIED if locked.
+  battery-check    Read UPower and enforce/lift the battery safety net.
+  restore          Apply APPLIED to hardware (boot restore).
+  status           Print the state file.
+EOF
+}
+
+# Same word-membership helper as power-saver-epp-fix/src/ppd-epp-override.
+has_word() {
+	case " $1 " in
+		*" $2 "*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+mode_epp() {
+	case "$1" in
+		power-saver) printf '%s\n' power ;;
+		balanced-powersave) printf '%s\n' balance_power ;;
+		balanced-performance) printf '%s\n' balance_performance ;;
+		performance) printf '%s\n' performance ;;
+	esac
+}
+
+mode_platform_profile() {
+	case "$1" in
+		power-saver) printf '%s\n' low-power ;;
+		balanced-powersave|balanced-performance) printf '%s\n' balanced ;;
+		performance) printf '%s\n' performance ;;
+	esac
+}
+
+mode_is_valid() {
+	case "$1" in
+		power-saver|balanced-powersave|balanced-performance|performance) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+apply_epp() {
+	target_epp="$(mode_epp "$1")"
+
+	available_file=
+	for f in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/energy_performance_available_preferences \
+		/sys/devices/system/cpu/cpu[0-9]*/cpufreq/available_energy_performance_preferences; do
+		if [ -r "$f" ]; then
+			available_file="$f"
+			break
+		fi
+	done
+
+	if [ -n "$available_file" ]; then
+		available="$(cat "$available_file")"
+		if ! has_word "$available" "$target_epp"; then
+			logger -t epp-modes "EPP preference '$target_epp' is not available: $available"
+			return 0
+		fi
+	fi
+
+	for f in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/energy_performance_preference; do
+		[ -e "$f" ] || continue
+		current="$(cat "$f" 2>/dev/null || true)"
+		if [ "$current" != "$target_epp" ]; then
+			printf '%s\n' "$target_epp" > "$f" 2>/dev/null || \
+				logger -t epp-modes "Failed to set $f to $target_epp"
+		fi
+	done
+}
+
+apply_platform_profile() {
+	platform_profile_file=/sys/firmware/acpi/platform_profile
+	platform_profile_choices_file=/sys/firmware/acpi/platform_profile_choices
+
+	[ -w "$platform_profile_file" ] || return 0
+	[ -r "$platform_profile_choices_file" ] || return 0
+
+	target_platform="$(mode_platform_profile "$1")"
+	choices="$(cat "$platform_profile_choices_file" 2>/dev/null || true)"
+	if ! has_word "$choices" "$target_platform"; then
+		logger -t epp-modes "platform_profile '$target_platform' is not available: $choices"
+		return 0
+	fi
+
+	current_platform="$(cat "$platform_profile_file" 2>/dev/null || true)"
+	if [ "$current_platform" != "$target_platform" ]; then
+		printf '%s\n' "$target_platform" > "$platform_profile_file" 2>/dev/null || \
+			logger -t epp-modes "Failed to set platform_profile to $target_platform"
+	fi
+}
+
+apply_hardware() {
+	apply_epp "$1"
+	apply_platform_profile "$1"
+}
+
+read_state_value() {
+	key="$1"
+	[ -r "$STATE_FILE" ] || return 0
+	while IFS='=' read -r k v; do
+		[ "$k" = "$key" ] && printf '%s\n' "$v"
+	done < "$STATE_FILE"
+	return 0
+}
+
+write_state() {
+	# $1=SELECTED $2=APPLIED $3=LOCK $4=SAFETY
+	tmp="$(mktemp "$STATE_DIR/.state.XXXXXX")"
+	cat > "$tmp" <<EOF
+SELECTED=$1
+APPLIED=$2
+LOCK=$3
+SAFETY=$4
+EOF
+	chmod 0644 "$tmp"
+	mv -f "$tmp" "$STATE_FILE"
+}
+
+current_or_default() {
+	key="$1"
+	default="$2"
+	value="$(read_state_value "$key")"
+	[ -n "$value" ] && printf '%s\n' "$value" || printf '%s\n' "$default"
+}
+
+with_lock() {
+	mkdir -p "$STATE_DIR"
+	exec 9>"$LOCK_FILE"
+	flock 9
+	"$@"
+}
+
+cmd_set() {
+	target="$1"
+	mode_is_valid "$target" || { echo "Unknown mode: $target" >&2; exit 1; }
+	lock="$(current_or_default LOCK 0)"
+	write_state "$target" "$target" "$lock" 0
+	apply_hardware "$target"
+}
+
+cmd_lock() {
+	selected="$(current_or_default SELECTED balanced-performance)"
+	applied="$(current_or_default APPLIED balanced-performance)"
+	safety="$(current_or_default SAFETY 0)"
+	write_state "$selected" "$applied" 1 "$safety"
+}
+
+cmd_unlock() {
+	selected="$(current_or_default SELECTED balanced-performance)"
+	applied="$(current_or_default APPLIED balanced-performance)"
+	safety="$(current_or_default SAFETY 0)"
+	write_state "$selected" "$applied" 0 "$safety"
+}
+
+cmd_reassert() {
+	lock="$(current_or_default LOCK 0)"
+	[ "$lock" = "1" ] || exit 0
+	applied="$(current_or_default APPLIED balanced-performance)"
+	apply_hardware "$applied"
+}
+
+# UPower state values: 2 = discharging. See org.freedesktop.UPower.Device.
+cmd_battery_check() {
+	percent="${FAKE_PERCENT:-}"
+	state="${FAKE_STATE:-}"
+
+	if [ -z "$percent" ] || [ -z "$state" ]; then
+		reply="$(gdbus call --system \
+			--dest org.freedesktop.UPower \
+			--object-path /org/freedesktop/UPower/devices/DisplayDevice \
+			--method org.freedesktop.DBus.Properties.GetAll \
+			org.freedesktop.UPower.Device 2>/dev/null || true)"
+		percent="$(printf '%s' "$reply" | grep -oE "'Percentage': <[0-9.]+>" | grep -oE '[0-9.]+' || echo 100)"
+		state_num="$(printf '%s' "$reply" | grep -oE "'State': <uint32 [0-9]+>" | grep -oE '[0-9]+' || echo 0)"
+		[ "$state_num" = "2" ] && state=discharging || state=other
+	fi
+
+	selected="$(current_or_default SELECTED balanced-performance)"
+	applied="$(current_or_default APPLIED balanced-performance)"
+	lock="$(current_or_default LOCK 0)"
+	safety="$(current_or_default SAFETY 0)"
+
+	is_below="$(awk -v p="$percent" 'BEGIN { print (p < 20) ? 1 : 0 }')"
+	is_above="$(awk -v p="$percent" 'BEGIN { print (p >= 25) ? 1 : 0 }')"
+
+	if [ "$state" = "discharging" ] && [ "$is_below" = "1" ] && [ "$safety" != "1" ]; then
+		write_state "$selected" balanced-powersave "$lock" 1
+		apply_hardware balanced-powersave
+	elif { [ "$state" != "discharging" ] || [ "$is_above" = "1" ]; } && [ "$safety" = "1" ]; then
+		write_state "$selected" "$selected" "$lock" 0
+		apply_hardware "$selected"
+	fi
+}
+
+cmd_restore() {
+	mkdir -p "$STATE_DIR"
+	applied="$(current_or_default APPLIED balanced-performance)"
+	selected="$(current_or_default SELECTED "$applied")"
+	lock="$(current_or_default LOCK 0)"
+	safety="$(current_or_default SAFETY 0)"
+	[ -f "$STATE_FILE" ] || write_state "$selected" "$applied" "$lock" "$safety"
+	apply_hardware "$applied"
+}
+
+cmd_status() {
+	[ -r "$STATE_FILE" ] && cat "$STATE_FILE" || echo "(no state file yet)"
+}
+
+require_root
+
+[ "$#" -ge 1 ] || { usage >&2; exit 1; }
+command="$1"
+shift
+
+case "$command" in
+	set)
+		[ "$#" -eq 1 ] || { usage >&2; exit 1; }
+		with_lock cmd_set "$1"
+		;;
+	lock) with_lock cmd_lock ;;
+	unlock) with_lock cmd_unlock ;;
+	reassert) with_lock cmd_reassert ;;
+	battery-check) with_lock cmd_battery_check ;;
+	restore) with_lock cmd_restore ;;
+	status) cmd_status ;;
+	-h|--help) usage ;;
+	*) echo "Unknown command: $command" >&2; usage >&2; exit 1 ;;
+esac

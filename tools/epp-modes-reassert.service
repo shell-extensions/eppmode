@@ -1,0 +1,6 @@
+[Unit]
+Description=Re-enforce locked EPP Power Modes state after drift
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/epp-modes-helper reassert
