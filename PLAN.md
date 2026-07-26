@@ -1,4 +1,4 @@
-# EPP-Toggle: GNOME-Shell-Extension als Nachfolger von power-saver-epp-fix
+# EPP Power Modes: GNOME-Shell-Extension als Nachfolger von power-saver-epp-fix
 
 Status: Planungsdokument, Implementierung noch nicht begonnen.
 
@@ -25,41 +25,75 @@ Alle Kernentscheidungen wurden mit dem Nutzer über mehrere Rückfragen abgestim
    - `balanced-powersave` → EPP `balance_power`, platform_profile `balanced`
    - `balanced-performance` → EPP `balance_performance`, platform_profile `balanced`
    - `performance` → EPP `performance`, platform_profile `performance`
-3. **UI**: ein Quick-Settings-Toggle mit Dropdown/Submenü — 4 Radio-Zustände + Trennlinie + „Lock"-Switch-Eintrag.
+
+   Beschriftungen in drei Sprachen (Englisch als Quellsprache/msgid, Deutsch, Spanisch — siehe Abschnitt „Mehrsprachigkeit"), je Zustand in zwei Formen, weil Menü und Kachel unterschiedlich viel Platz haben:
+
+   **Menü-Label (volle Form):**
+
+   | ID | English (msgid) | Deutsch | Español |
+   |---|---|---|---|
+   | `power-saver` | Power Saver | Energie sparen | Ahorro de energía |
+   | `balanced-powersave` | Balanced-Saver | Ausgeglichen-Sparsam | Equilibrado-Ahorro |
+   | `balanced-performance` | Balanced-Performance | Ausgeglichen-Leistung | Equilibrado-Rendimiento |
+   | `performance` | Performance | Leistung | Rendimiento |
+
+   **Kachel-Untertitel (Kurzform, ≤ 14 Zeichen — siehe Begründung unten):**
+
+   | ID | English | Deutsch | Español |
+   |---|---|---|---|
+   | `power-saver` | Saver | Sparen | Ahorro |
+   | `balanced-powersave` | Balanced − | Ausgeglichen − | Equilibrado − |
+   | `balanced-performance` | Balanced + | Ausgeglichen + | Equilibrado + |
+   | `performance` | Performance | Leistung | Rendimiento |
+
+   Kachel-Titel: `Power` / „Energie" / „Energía" (je 5–7 Zeichen).
+
+   „Energie sparen", „Ausgeglichen", „Leistung", „Ahorro de energía", „Equilibrado" und „Rendimiento" sind wortgleich GNOMEs offizielle Übersetzungen (verifiziert aus `/usr/share/locale-langpack/{de,es}/LC_MESSAGES/gnome-shell.mo`) — die beiden Zwischenstufen fügen sich dadurch als natürliche Verfeinerung derselben Skala ein statt wie Fremdkörper zu wirken.
+
+   **Warum zwei Formen je Modus:** „Energieoptionen" (15 Zeichen) wird in der Quick-Settings-Kachel nachweislich abgeschnitten — die nutzbare Breite liegt bei etwa 14 Zeichen. „Ausgeglichen-Leistung" (21) oder „Ahorro de energía" (17) würden als Untertitel ebenso abgeschnitten. Die Kurzformen bleiben in allen drei Sprachen bei ≤ 14 Zeichen; die volle Bezeichnung steht im Dropdown, wo die Breite ausreicht.
+3. **UI**: ein Quick-Settings-Toggle mit Dropdown/Submenü — 4 Radio-Zustände + Trennlinie + „Lock"-Switch-Eintrag + Trennlinie + Link zu den Energieeinstellungen (siehe UI-Abschnitt unten).
 4. **Lock**: blockiert nur *automatische* Änderungen (Firmware-/ACPI-Hotkey-Drift). Manuelle Auswahl über unsere Extension funktioniert **immer sofort**, auch bei aktivem Lock.
 5. **Akku-Sicherheitsnetz** (Ausnahme, die sogar Lock übersteuert): Kein selbstgebautes Lastmonitoring nötig — verifiziert, dass Intel-CPUs im Leerlauf unabhängig von EPP über C-States (C1–C10 bestätigt) selbst herunterregeln. Stattdessen wird **UPowers Akkustand direkt** gelesen (`org.freedesktop.UPower`, `DisplayDevice`) — dieselbe Kennzahl, auf der auch GNOMEs eigenes `power-saver-profile-on-low-battery`-Feature basiert. Unter 20% *und* im Akkubetrieb wird automatisch auf `balanced-powersave` erzwungen, unabhängig von Lock. Ab 25% oder bei Netzbetrieb wird automatisch der zuletzt gewählte Zustand wiederhergestellt (Hysterese verhindert Flattern an der Schwelle). **Ein erneuter manueller Klick gewinnt aber sofort** — auch während das Sicherheitsnetz aktiv heruntergeschaltet hat; der nächste periodische Battery-Check (≤60s, oder sofort bei Netzstecker-Ereignis) schaltet bei Bedarf erneut ein.
 6. **`power-profiles-daemon` wird komplett umgangen** — eigene State-Maschine, eigener Root-Helper schreibt EPP/`platform_profile` direkt. Der native GNOME-Schalter wird nach Möglichkeit versteckt (siehe Risiko unten), um zwei konkurrierende Regler zu vermeiden.
 
 ## Architektur
 
-### Repo-Layout (Name vorläufig, leicht änderbar)
+### Repo-Layout
 
-Repo: `github.com/shell-extensions/epp-toggle`, UUID `epp-toggle@shell-extensions.github.io`.
+Repo: `github.com/shell-extensions/epp-modes`, UUID `epp-modes@shell-extensions.github.io`. Anzeigename „EPP Power Modes" — über „Power" auf extensions.gnome.org auffindbar, über „EPP" eindeutig (Kollisionsprüfung: `epp` liefert dort und auf GitHub 0 Treffer; `power modes`/`power profile` sind beide dicht belegt, u.a. `voidbert/powermodes`).
 
 ```
-epp-toggle/
+epp-modes/
 ├── metadata.json            # uuid, shell-version ["46","47","48","49"], gettext-domain; KEIN settings-schema
 ├── extension.js             # Indicator + 4-State-QuickMenuToggle + Lock-Switch + Native-Hide + FileMonitor
 ├── install.sh                # Kandidaten-Pfadsuche (user+system-wide), Helper/Sudoers/Units installieren
 ├── uninstall.sh
 ├── README.md
 ├── LICENSE
+├── po/
+│   ├── epp-modes.pot        # aus extension.js via xgettext
+│   ├── de.po
+│   └── es.po
+├── locale/                  # aus po/ gebaut (msgfmt), eingecheckt fürs EGO-ZIP
+│   ├── de/LC_MESSAGES/epp-modes.mo
+│   └── es/LC_MESSAGES/epp-modes.mo
 └── tools/
-    ├── epp-toggle-helper                # root bash: set|lock|unlock|reassert|battery-check|restore|status
-    ├── epp-toggle-restore.service        # oneshot Boot-Restore
-    ├── epp-toggle-reassert.service       # oneshot: helper reassert (Lock-Drift-Durchsetzung)
-    ├── epp-toggle-reassert.path          # PathChanged=/sys/firmware/acpi/platform_profile
-    ├── epp-toggle-reassert.timer         # 10s Backstop
-    ├── epp-toggle-battery.service        # oneshot: helper battery-check
-    ├── epp-toggle-battery.timer          # 60s Poll
-    └── 99-epp-toggle-power.rules         # udev: power_supply change → battery.service sofort
+    ├── epp-modes-helper                # root bash: set|lock|unlock|reassert|battery-check|restore|status
+    ├── epp-modes-restore.service        # oneshot Boot-Restore
+    ├── epp-modes-reassert.service       # oneshot: helper reassert (Lock-Drift-Durchsetzung)
+    ├── epp-modes-reassert.path          # PathChanged=/sys/firmware/acpi/platform_profile
+    ├── epp-modes-reassert.timer         # 10s Backstop
+    ├── epp-modes-battery.service        # oneshot: helper battery-check
+    ├── epp-modes-battery.timer          # 60s Poll
+    ├── 99-epp-modes-power.rules         # udev: power_supply change → battery.service sofort
+    └── build-locale.sh                  # xgettext + msgmerge + msgfmt, idempotent
 ```
 
 **Kein GSettings/`prefs.js`**: Jeder gespeicherte Zustand muss ohnehin von root gelesen/geschrieben werden (EPP-Writes, Lock-Durchsetzung, Battery-Override) — eine zweite (dconf-)Quelle würde nur erneut die Art von Reconciliation-Bugs einladen, die diese Neugestaltung gerade vermeiden soll. Root-State-File ist die einzige Wahrheit, exakt wie bei `thinkpad-red-led`.
 
 ### State-Modell
 
-Root-State-File `/var/lib/epp-toggle/state` (`0644`, key=value):
+Root-State-File `/var/lib/epp-modes/state` (`0644`, key=value):
 ```
 SELECTED=balanced-performance   # zuletzt vom Nutzer explizit gewählter Zustand (Restore-Ziel)
 APPLIED=balanced-performance    # aktuell tatsächlich gesetztes EPP
@@ -79,21 +113,51 @@ Hardware-Schreiblogik direkt aus `src/ppd-epp-override` übernommen: EPP-Schreib
 
 ### Privilegien-Brücke
 
-1:1 das `thinkpad-red-led`-Muster: `install.sh` schreibt `/etc/sudoers.d/epp-toggle` (`<user> ALL=(root) NOPASSWD: /usr/local/bin/epp-toggle-helper`, validiert mit `visudo -c -f`); Extension ruft `GLib.spawn_async_with_pipes(['sudo','-n','/usr/local/bin/epp-toggle-helper', ...args])` mit derselben `_isAuthError`/Setup-Dialog-Fallback-Logik wie in `thinkpad-red-led/extension.js:152-224`.
+1:1 das `thinkpad-red-led`-Muster: `install.sh` schreibt `/etc/sudoers.d/epp-modes` (`<user> ALL=(root) NOPASSWD: /usr/local/bin/epp-modes-helper`, validiert mit `visudo -c -f`); Extension ruft `GLib.spawn_async_with_pipes(['sudo','-n','/usr/local/bin/epp-modes-helper', ...args])` mit derselben `_isAuthError`/Setup-Dialog-Fallback-Logik wie in `thinkpad-red-led/extension.js:152-224`.
 
 ### Drift-Reassertion (Lock-Durchsetzung)
 
-Einzige realistische Drift-Quelle nach Wegfall von `power-profiles-daemon`: Firmware/ACPI-Hotkeys, die `/sys/firmware/acpi/platform_profile` direkt ändern. Wiederverwendung des bewährten Path+Timer-Musters aus `power-saver-epp-fix/systemd/ppd-epp-override.{path,timer}` — `PathChanged=/sys/firmware/acpi/platform_profile` löst `epp-toggle-reassert.service` aus, ein 10s-Timer ist Backstop für Fälle ohne Datei-Änderungsereignis. Die Durchsetzung selbst passiert im Helper (`reassert` prüft `LOCK`), nicht durch Enable/Disable der Units — die Extension braucht dadurch keine `systemctl`-Rechte.
+Einzige realistische Drift-Quelle nach Wegfall von `power-profiles-daemon`: Firmware/ACPI-Hotkeys, die `/sys/firmware/acpi/platform_profile` direkt ändern. Wiederverwendung des bewährten Path+Timer-Musters aus `power-saver-epp-fix/systemd/ppd-epp-override.{path,timer}` — `PathChanged=/sys/firmware/acpi/platform_profile` löst `epp-modes-reassert.service` aus, ein 10s-Timer ist Backstop für Fälle ohne Datei-Änderungsereignis. Die Durchsetzung selbst passiert im Helper (`reassert` prüft `LOCK`), nicht durch Enable/Disable der Units — die Extension braucht dadurch keine `systemctl`-Rechte.
 
 ### Akku-Sicherheitsnetz
 
-Root-seitig, Poll-basiert (kein Dauerprozess, kein GJS-D-Bus-Abo nötig): `epp-toggle-battery.timer` alle 60s + `99-epp-toggle-power.rules` (udev `power_supply`-`change` → sofortiger `battery-check`) für schnelle Reaktion bei Netzstecker-Ereignissen. Root-seitig statt in der Extension, damit es GNOME-Shell-Neustarts/Extension-Deaktivierung übersteht — dieselbe Robustheits-Überlegung wie beim `power-profiles-daemon`-Bypass insgesamt.
+Root-seitig, Poll-basiert (kein Dauerprozess, kein GJS-D-Bus-Abo nötig): `epp-modes-battery.timer` alle 60s + `99-epp-modes-power.rules` (udev `power_supply`-`change` → sofortiger `battery-check`) für schnelle Reaktion bei Netzstecker-Ereignissen. Root-seitig statt in der Extension, damit es GNOME-Shell-Neustarts/Extension-Deaktivierung übersteht — dieselbe Robustheits-Überlegung wie beim `power-profiles-daemon`-Bypass insgesamt.
 
 ### UI + natives Toggle verstecken
 
 `EppMenu extends QuickSettings.QuickMenuToggle` (4 `PopupMenu.PopupBaseMenuItem`-Zeilen mit `emblem-ok-symbolic`-Tick, exakt wie `thinkpad-red-led/extension.js:48-67`) + `PopupMenu.PopupSeparatorMenuItem` + `PopupMenu.PopupSwitchMenuItem` für Lock (Muster aus `gold-silver-price`). `EppIndicator extends QuickSettings.SystemIndicator` pusht das Menü; `enable()`/`disable()` wie `thinkpad-red-led/extension.js:515-552`. Ein `Gio.FileMonitor` auf dem State-File hält die UI live synchron, wenn Battery-Check oder Reassert im Hintergrund etwas ändern.
 
-**Risiko, offen als Best-Effort markiert**: Das Verstecken des nativen Schalters (`Main.panel.statusArea.quickSettings._powerProfiles`) nutzt eine undokumentierte, versionsfragile interne GNOME-Shell-Eigenschaft — nicht verifizierbar, da die Shell-UI-JS im gestrippten `gnome-shell`-Binary steckt. Komplett in `try/catch`: schlägt es fehl oder ist die Eigenschaft umbenannt, bleiben beide Schalter sichtbar (unser Toggle mit klar unterscheidbarem Icon/Label) statt die Extension zu zerbrechen — nie eine harte Anforderung.
+Kachel-Titel „Energie"/„Power"/„Energía" (statt des zu langen „Energieoptionen", siehe Beschriftungstabelle oben), Untertitel = Kurzform des aktiven Modus. Menü-Header: `this.menu.setHeader('power-profile-balanced-symbolic', 'EPP Power Modes')` — Eigenname, bewusst nicht übersetzt; Icon identisch mit dem des nativen Buttons (Teil des Shell-Icon-Themes).
+
+**Energieeinstellungen-Link**: kompensiert den mit dem nativen Schalter verschwindenden Settings-Einstieg (siehe Risiko-Absatz unten). Ganz unten im Menü, nach dem Lock-Switch, exakt nach dem Vorbild des nativen `PowerProfilesToggle` (`ui/status/powerProfiles.js:72-74` im gestrippten `gnome-shell`-Binary, per `gresource extract` verifiziert — siehe unten):
+
+```js
+this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+this.menu.addSettingsAction(_('Power Settings'), 'gnome-power-panel.desktop');
+```
+
+`addSettingsAction` (`ui/popupMenu.js:622-637`) bewusst statt `addAction`: erledigt `Main.overview.hide()`, `Main.panel.closeQuickSettings()`, `app.activate()`, das `menuItem.visible = Main.sessionMode.allowSettings`-Gate (blendet den Eintrag korrekt am Sperrbildschirm aus) und die `_settingsActions`-Registrierung für Session-Mode-Wechsel — alles gratis. Das Muster aus `loadshed/extension.js:248-251` (manuelles `menu.close(PopupAnimation.FADE)`) ist für die *eigenen* Prefs richtig, deckt den Session-Mode-Lebenszyklus aber nicht ab und wird hier nicht verwendet.
+
+**Risiko, offen als Best-Effort markiert**: Das Verstecken des nativen Schalters (`Main.panel.statusArea.quickSettings._powerProfiles`) nutzt eine undokumentierte, versionsfragile interne GNOME-Shell-Eigenschaft. Für Shell 46 verifiziert (`ui/panel.js:549`: `this._powerProfiles = new PowerProfileStatus.Indicator();`) — die Shell-UI-JS ist entgegen früherer Annahme lesbar, sie liegt als GResource in `/usr/lib/gnome-shell/libshell-14.so`:
+```bash
+gresource extract /usr/lib/gnome-shell/libshell-14.so /org/gnome/shell/ui/panel.js
+```
+Für 47-49 bleibt die Eigenschaft unbestätigt — verifiziert ist die heutige Existenz, nicht die künftige Stabilität. Komplett in `try/catch`: schlägt es fehl oder ist die Eigenschaft umbenannt, bleiben beide Schalter sichtbar (unser Toggle mit klar unterscheidbarem Icon/Label) statt die Extension zu zerbrechen — nie eine harte Anforderung.
+
+### Mehrsprachigkeit
+
+Zielsprachen: Englisch (Quellsprache/msgid, kein `en.po` nötig — EGO-Konvention), Deutsch, Spanisch. `initTranslations()` (`extensions/sharedInternals.js:120-131`) läuft automatisch beim Laden der Extension und bindet an `<ext>/locale`, sobald dieses Verzeichnis existiert — kein manueller Aufruf in `enable()` nötig. Neben `gettext`/`ngettext` steht `pgettext(context, str)` zur Verfügung (`sharedInternals.js:169-172`, `GLib.dpgettext2`).
+
+**`pgettext` statt `gettext` für die Modus-Labels**: „Performance" tritt sowohl als volles Menü-Label als auch als Kachel-Kurzform auf. Mit nur einer `msgid` könnten Übersetzer beide Rollen nicht getrennt kürzen — im Spanischen müssen „Ahorro de energía" (Menü) und „Ahorro" (Kachel) auseinandergehalten werden. Daher zwei Kontexte:
+
+```js
+import {gettext as _, pgettext} from 'resource:///org/gnome/shell/extensions/extension.js';
+
+pgettext('power mode', 'Performance')    // Menü, volle Form
+pgettext('tile subtitle', 'Performance') // Kachel, ≤ 14 Zeichen
+```
+
+In `de.po`/`es.po` als Kommentar festhalten, dass Strings mit Kontext `tile subtitle` die 14-Zeichen-Grenze einhalten müssen — sonst reproduziert eine spätere Übersetzung den Abschneide-Fehler, der diese Beschriftungsrunde ausgelöst hat. `tools/build-locale.sh` erzeugt `po/epp-modes.pot` per `xgettext` aus `extension.js`, merged per `msgmerge` in `de.po`/`es.po` und baut per `msgfmt` die `.mo`-Dateien nach `locale/`.
 
 ### install.sh / uninstall.sh
 
@@ -107,12 +171,13 @@ Root-seitig, Poll-basiert (kein Dauerprozess, kein GJS-D-Bus-Abo nötig): `epp-t
 
 Auf einem echten GNOME-46/Ubuntu-24.04/`intel_pstate`-Gerät:
 
-1. Install: `epp-toggle-helper status` prüfen, `systemctl is-enabled` für Path/Timer/Restore.
-2. Alle 4 Zustände durchklicken, `energy_performance_preference` (alle CPUs) + `platform_profile` gegen die Tabelle prüfen.
-3. Natives Toggle-Verstecken verifizieren (und Fallback testen, indem der Property-Name testweise falsch gesetzt wird — beide Toggles müssen sichtbar bleiben).
-4. Lock + simulierte Drift: ohne Lock `platform_profile` manuell umschreiben → bleibt (kein Revert). Mit Lock → wird innerhalb ~1s zurückgesetzt (`journalctl -u epp-toggle-reassert.service`).
-5. Akku-Sicherheitsnetz ohne echtes Leerlaufen: `FAKE_PERCENT`/`FAKE_STATE`-Env-Var-Hook in `battery-check` für Tests (z.B. `sudo FAKE_STATE=discharging FAKE_PERCENT=15 epp-toggle-helper battery-check` → `SAFETY=1`, `APPLIED=balanced-powersave`; danach `FAKE_STATE=charging FAKE_PERCENT=50` → Restore auf `SELECTED`). Zusätzlich: manueller Klick während aktivem Sicherheitsnetz muss sofort greifen.
-6. Persistenz: Zustand wählen, GNOME Shell neu starten → Toggle zeigt gespeicherten Zustand. Neustart → `epp-toggle-restore.service` wendet `APPLIED` an, `battery-check` korrigiert bei Bedarf selbst.
+1. Install: `epp-modes-helper status` prüfen, `systemctl is-enabled` für Path/Timer/Restore.
+2. Alle 4 Zustände durchklicken, `energy_performance_preference` (alle CPUs) + `platform_profile` gegen die Tabelle prüfen; Menü-Label und Kachel-Untertitel in allen drei Sprachen (`LANG=de_DE.UTF-8`, `LANG=es_ES.UTF-8`, `LANG=en_US.UTF-8`) auf korrekten Text und fehlende Abschneidung prüfen.
+3. Natives Toggle-Verstecken verifizieren: Property-Existenz per `gresource extract /usr/lib/gnome-shell/libshell-14.so /org/gnome/shell/ui/panel.js` gegen die jeweils installierte Shell-Version prüfen, dann Fallback testen, indem der Property-Name testweise falsch gesetzt wird — beide Toggles müssen sichtbar bleiben.
+3b. Energieeinstellungen-Link: Klick öffnet `gnome-control-center power`, Quick-Settings-Menü schließt sich; Eintrag ist am Sperrbildschirm (`allowSettings=false`) ausgeblendet.
+4. Lock + simulierte Drift: ohne Lock `platform_profile` manuell umschreiben → bleibt (kein Revert). Mit Lock → wird innerhalb ~1s zurückgesetzt (`journalctl -u epp-modes-reassert.service`).
+5. Akku-Sicherheitsnetz ohne echtes Leerlaufen: `FAKE_PERCENT`/`FAKE_STATE`-Env-Var-Hook in `battery-check` für Tests (z.B. `sudo FAKE_STATE=discharging FAKE_PERCENT=15 epp-modes-helper battery-check` → `SAFETY=1`, `APPLIED=balanced-powersave`; danach `FAKE_STATE=charging FAKE_PERCENT=50` → Restore auf `SELECTED`). Zusätzlich: manueller Klick während aktivem Sicherheitsnetz muss sofort greifen.
+6. Persistenz: Zustand wählen, GNOME Shell neu starten → Toggle zeigt gespeicherten Zustand. Neustart → `epp-modes-restore.service` wendet `APPLIED` an, `battery-check` korrigiert bei Bedarf selbst.
 
 ## Kritische Dateien als Vorlage
 
@@ -123,3 +188,6 @@ Auf einem echten GNOME-46/Ubuntu-24.04/`intel_pstate`-Gerät:
 - `/home/yurij/web/git/thinkpad-red-led@juanmagd.dev/install.sh` + `/home/yurij/web/git/power-saver-epp-fix/uninstall.sh` — Install-Pfadsuche + korrekter (Bug-freier) Uninstall
 - `/home/yurij/web/git/thinkpad-red-led@juanmagd.dev/tools/thinkpad-red-led-restore.service` — Boot-Restore-Unit-Vorlage
 - `/home/yurij/web/git/gold-silver-price@arononak.github.io/` (extension.js) — `PopupSwitchMenuItem`-Muster für Lock
+- `gresource extract /usr/lib/gnome-shell/libshell-14.so /org/gnome/shell/ui/status/powerProfiles.js` + `.../ui/popupMenu.js` + `.../ui/panel.js` — nativer `addSettingsAction`-Aufbau, `allowSettings`-Gate, bestätigte `_powerProfiles`-Eigenschaft (Shell 46)
+- `gresource extract /usr/lib/gnome-shell/libshell-14.so /org/gnome/shell/extensions/sharedInternals.js` — `initTranslations()`/`gettext()`/`pgettext()`-API der Extension-Basisklasse
+- `/usr/share/locale-langpack/{de,es}/LC_MESSAGES/gnome-shell.mo` — Referenz für die offiziellen deutschen/spanischen GNOME-Übersetzungen der Modus-Namen
