@@ -40,7 +40,7 @@ Removes the helper, sudoers rule, systemd units, udev rule and state
 directory. Remove the GNOME Shell extension itself separately, e.g.:
 
 ```sh
-gnome-extensions uninstall epp-modes@shell-extensions.github.io
+gnome-extensions uninstall epp-modes@yurij.de
 ```
 
 ## Translations

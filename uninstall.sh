@@ -56,4 +56,4 @@ fi
 
 echo "Removed EPP Power Modes root helper, units and state."
 echo "The GNOME Shell extension itself is removed separately, e.g. via"
-echo "gnome-extensions uninstall epp-modes@shell-extensions.github.io"
+echo "gnome-extensions uninstall epp-modes@yurij.de"

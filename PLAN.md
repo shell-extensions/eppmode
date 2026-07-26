@@ -60,7 +60,7 @@ Alle Kernentscheidungen wurden mit dem Nutzer über mehrere Rückfragen abgestim
 
 ### Repo-Layout
 
-Repo: `github.com/shell-extensions/epp-modes`, UUID `epp-modes@shell-extensions.github.io`. Anzeigename „EPP Power Modes" — über „Power" auf extensions.gnome.org auffindbar, über „EPP" eindeutig (Kollisionsprüfung: `epp` liefert dort und auf GitHub 0 Treffer; `power modes`/`power profile` sind beide dicht belegt, u.a. `voidbert/powermodes`).
+Repo: `github.com/shell-extensions/epp-modes`, UUID `epp-modes@yurij.de`. Anzeigename „EPP Power Modes" — über „Power" auf extensions.gnome.org auffindbar, über „EPP" eindeutig (Kollisionsprüfung: `epp` liefert dort und auf GitHub 0 Treffer; `power modes`/`power profile` sind beide dicht belegt, u.a. `voidbert/powermodes`).
 
 ```
 epp-modes/

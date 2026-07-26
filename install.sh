@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-UUID="epp-modes@shell-extensions.github.io"
+UUID="epp-modes@yurij.de"
 HELPER_NAME="epp-modes-helper"
 HELPER_INSTALL_PATH="/usr/local/bin/${HELPER_NAME}"
 SUDOERS_FILE="/etc/sudoers.d/epp-modes"

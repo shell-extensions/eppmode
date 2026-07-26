@@ -386,7 +386,7 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
 
         addLabel(_('This extension needs root access to control the CPU energy-performance-preference.'), STYLE_TITLE);
         addLabel(_('Run the install script once:'), STYLE_TEXT);
-        addCode('bash $HOME/.local/share/gnome-shell/extensions/epp-modes@shell-extensions.github.io/install.sh');
+        addCode('bash $HOME/.local/share/gnome-shell/extensions/epp-modes@yurij.de/install.sh');
         addLabel(_('Then restart GNOME Shell or disable/enable the extension.'), STYLE_TEXT);
 
         dialog.contentLayout.add_child(box);
