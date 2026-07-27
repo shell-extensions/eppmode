@@ -515,6 +515,10 @@ test_unlocked_balanced_power_epp_remains_exact() {
     printf '%s\n' balance_power \
       > "${test_root}/sys/devices/system/cpu/${cpu}/cpufreq/energy_performance_preference"
   done
+  # balanced-powersave now shares the low-power platform_profile tier with
+  # power-saver (fan/DYTC follows platform_profile, not EPP); mirror that in
+  # the fixture instead of leaving it at setup_fixture's "balanced" default.
+  printf '%s\n' low-power > "${test_root}/sys/firmware/acpi/platform_profile"
 
   run_helper rw reassert
 
@@ -627,7 +631,7 @@ test_safety_state_blocks_unlocked_performance_drift() {
     "$(cat "${test_root}/var/lib/eppmode/state")"
   assert_eq 'safety EPP after performance drift' balance_power \
     "$(cat "${test_root}/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference")"
-  assert_eq 'safety platform after performance drift' balanced \
+  assert_eq 'safety platform after performance drift' low-power \
     "$(cat "${test_root}/sys/firmware/acpi/platform_profile")"
 }
 

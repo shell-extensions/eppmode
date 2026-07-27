@@ -8,9 +8,15 @@ energy-performance-preference (EPP) states:
 | Mode                    | EPP                    | `platform_profile` |
 |--------------------------|-------------------------|---------------------|
 | Power Saver              | `power`                 | `low-power`          |
-| Balanced-Saver            | `balance_power`         | `balanced`            |
+| Balanced-Saver            | `balance_power`         | `low-power`            |
 | Balanced-Performance      | `balance_performance`   | `balanced`            |
 | Performance               | `performance`           | `performance`         |
+
+`platform_profile` only has three tiers against four EPP levels;
+Balanced-Saver shares the `low-power` tier with Power Saver rather than
+with Balanced-Performance, because on ThinkPad DYTC hardware
+`platform_profile` — not EPP — drives the fan curve. EPP is the finer knob
+within that shared tier.
 
 Plus a **Lock** switch that blocks automatic (firmware/ACPI-hotkey) drift
 without affecting manual selection, and a **battery safety net** that
@@ -37,7 +43,8 @@ On systems without a `platform_profile` interface, EPP works independently.
 When the interface is available, the helper verifies that EPP and platform
 profile stay consistent. With Lock enabled, drift is reverted. With Lock
 disabled, external platform drift is adopted: `balanced` maps to
-`Balanced-Performance` unless the CPUs already expose `balance_power`.
+`Balanced-Performance`; `low-power` maps to `Power Saver` unless the CPUs
+already expose `balance_power`, in which case it maps to `Balanced-Saver`.
 On newer kernels, provider-specific interfaces below
 `/sys/class/platform-profile/` are authoritative for reading and verification.
 The helper prefers the legacy `/sys/firmware/acpi/platform_profile` aggregate

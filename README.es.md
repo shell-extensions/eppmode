@@ -8,9 +8,15 @@ fijos de preferencia de rendimiento energético (EPP) de la CPU:
 | Modo                     | EPP                   | `platform_profile` |
 |--------------------------|-----------------------|--------------------|
 | Ahorro de energía        | `power`               | `low-power`        |
-| Equilibrado-Ahorro       | `balance_power`       | `balanced`         |
+| Equilibrado-Ahorro       | `balance_power`       | `low-power`         |
 | Equilibrado-Rendimiento  | `balance_performance` | `balanced`         |
 | Rendimiento              | `performance`         | `performance`      |
+
+`platform_profile` solo tiene tres niveles frente a los cuatro de EPP;
+Equilibrado-Ahorro comparte el nivel `low-power` con Ahorro de energía en
+vez de con Equilibrado-Rendimiento, porque en hardware ThinkPad DYTC es
+`platform_profile` —no EPP— quien controla el ventilador. EPP sigue siendo
+el ajuste más fino dentro de ese nivel compartido.
 
 También incluye un interruptor **Bloquear** que impide cambios automáticos
 causados por el firmware o las teclas ACPI sin afectar a la selección manual,
@@ -39,8 +45,9 @@ cuatro modos de la tabla. Los valores de CPU divergentes se muestran como
 Cuando existe `platform_profile`, el ayudante verifica que EPP y el perfil de
 plataforma permanezcan coherentes. Con el bloqueo activado, revierte cualquier
 desviación. Con el bloqueo desactivado, adopta los cambios externos:
-`balanced` se convierte en `Equilibrado-Rendimiento`, salvo que las CPU ya
-indiquen `balance_power`.
+`balanced` se convierte en `Equilibrado-Rendimiento`; `low-power` se
+convierte en `Ahorro de energía`, salvo que las CPU ya indiquen
+`balance_power`, en cuyo caso se convierte en `Equilibrado-Ahorro`.
 En kernels recientes, las interfaces específicas de cada proveedor bajo
 `/sys/class/platform-profile/` son la fuente autoritativa para la lectura y la
 verificación. Para escribir, el ayudante prefiere la interfaz agregada antigua

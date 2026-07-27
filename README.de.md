@@ -8,9 +8,15 @@ Zuständen für die CPU-Energie-Leistungs-Voreinstellung (EPP):
 | Modus                  | EPP                   | `platform_profile` |
 |------------------------|-----------------------|--------------------|
 | Energie sparen         | `power`               | `low-power`        |
-| Ausgeglichen-Sparsam   | `balance_power`       | `balanced`         |
+| Ausgeglichen-Sparsam   | `balance_power`       | `low-power`         |
 | Ausgeglichen-Leistung  | `balance_performance` | `balanced`         |
 | Leistung               | `performance`         | `performance`      |
+
+`platform_profile` hat nur drei Stufen gegenüber vier EPP-Stufen;
+Ausgeglichen-Sparsam teilt sich die `low-power`-Stufe mit Energie sparen
+statt mit Ausgeglichen-Leistung, weil auf ThinkPad-DYTC-Hardware
+`platform_profile` — nicht EPP — den Lüfter steuert. EPP bleibt innerhalb
+dieser gemeinsamen Stufe der feinere Regler.
 
 Dazu kommen ein **Sperren**-Schalter, der automatische Abweichungen durch
 Firmware oder ACPI-Hotkeys verhindert, ohne die manuelle Auswahl
@@ -39,8 +45,9 @@ nicht lesbare oder nicht unterstützte EPP-Werte als **Unbekannt**.
 Wenn `platform_profile` vorhanden ist, prüft der Helfer, dass EPP und
 Plattformprofil konsistent bleiben. Bei aktiver Sperre wird eine Abweichung
 zurückgesetzt. Bei gelöster Sperre wird eine externe Plattformänderung
-übernommen: `balanced` wird zu `Ausgeglichen-Leistung`, sofern die CPUs nicht
-bereits `balance_power` melden.
+übernommen: `balanced` wird zu `Ausgeglichen-Leistung`; `low-power` wird zu
+`Energie sparen`, außer die CPUs melden bereits `balance_power` — dann wird
+es zu `Ausgeglichen-Sparsam`.
 Auf neueren Kerneln sind die providerspezifischen Schnittstellen unter
 `/sys/class/platform-profile/` für Lesen und Prüfung maßgeblich. Zum Schreiben
 bevorzugt der Helfer den alten Sammelpfad

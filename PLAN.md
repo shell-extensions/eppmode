@@ -22,9 +22,19 @@ Alle Kernentscheidungen wurden mit dem Nutzer über mehrere Rückfragen abgestim
 1. **Neues Repo**, GNOME-Shell-46-Extension (GJS), Ubuntu 24.04 / Intel `intel_pstate`/HWP — dieselbe Hardware-Basis wie `power-saver-epp-fix`.
 2. **Vier feste Zustände**, unabhängig von Netz/Akku (kein Auto-Wechsel je Stromquelle mehr wie im alten Projekt — der Nutzer wählt jetzt bewusst selbst):
    - `power-saver` → EPP `power`, platform_profile `low-power`
-   - `balanced-powersave` → EPP `balance_power`, platform_profile `balanced`
+   - `balanced-powersave` → EPP `balance_power`, platform_profile `low-power`
    - `balanced-performance` → EPP `balance_performance`, platform_profile `balanced`
    - `performance` → EPP `performance`, platform_profile `performance`
+
+   `platform_profile` hat nur drei Stufen (`low-power`/`balanced`/`performance`)
+   gegenüber den vier EPP-Stufen; `balanced-powersave` teilt sich die
+   `low-power`-Stufe mit `power-saver` statt mit `balanced-performance`, weil
+   auf ThinkPad-DYTC-Hardware `platform_profile` — nicht EPP — den
+   Lüfter/die Thermik steuert (live beobachtet: Anwender wechselte von
+   `performance` auf `balanced-powersave`, Lüfter blieb unverändert, weil
+   `platform_profile` in beiden Fällen `balanced` gewesen wäre). EPP bleibt
+   innerhalb der `low-power`-Stufe der feinere Regler zwischen `power-saver`
+   und `balanced-powersave`.
 
    Beschriftungen in drei Sprachen (Englisch als Quellsprache/msgid, Deutsch, Spanisch — siehe Abschnitt „Mehrsprachigkeit"), je Zustand in zwei Formen, weil Menü und Kachel unterschiedlich viel Platz haben:
 
@@ -113,7 +123,7 @@ im Hintergrund nachgezogener Teilzustand.
 Helper-Subkommandos (alle `require_root`, alle über `flock` auf dem State-File serialisiert):
 - `set <state>` — validiert gegen die 4 IDs, schreibt und verifiziert zuerst die Hardware (erzwungen, ignoriert den Plattformprofil-Cooldown) und setzt danach `SELECTED=APPLIED=<state>` sowie `SAFETY=0`. Bleibt nur das Plattformprofil unbestätigt, gilt der Aufruf trotzdem als erfolgreich; `PLATFORM_PENDING` wird gesetzt. Manuell gewinnt sofort, unabhängig von Lock oder aktivem Sicherheitsnetz.
 - `lock` / `unlock` — setzt `LOCK`, schreibt keine Hardware.
-- `reassert` — bei `LOCK=1` oder aktivem Akku-Sicherheitsnetz wird `APPLIED` vollständig auf PPD, CPU-EPP und `platform_profile` zurückgeschrieben (Plattformprofil-Cooldown respektiert, im Gegensatz zu `set`). Bleibt dabei nur das Plattformprofil unbestätigt, wird `PLATFORM_PENDING` aktualisiert und `LOCK` **bleibt bestehen** — nur ein echter EPP-/PPD-Fehlschlag setzt `LOCK=0`. Bei `LOCK=0` wird externer Hardware-Drift stattdessen konsistent übernommen: `low-power` → `power-saver`, `performance` → `performance`, `balanced` zusammen mit `balance_power` → `balanced-powersave`, andernfalls standardmäßig → `balanced-performance` — außer das ausstehende Plattformprofil ist exakt das eigene noch unbestätigte von `APPLIED`; dann wird es als eigener Nachzieh-Versuch behandelt statt als fremder Drift. Anschließend werden PPD, EPP, Plattformprofil und State auf denselben Zielmodus gebracht.
+- `reassert` — bei `LOCK=1` oder aktivem Akku-Sicherheitsnetz wird `APPLIED` vollständig auf PPD, CPU-EPP und `platform_profile` zurückgeschrieben (Plattformprofil-Cooldown respektiert, im Gegensatz zu `set`). Bleibt dabei nur das Plattformprofil unbestätigt, wird `PLATFORM_PENDING` aktualisiert und `LOCK` **bleibt bestehen** — nur ein echter EPP-/PPD-Fehlschlag setzt `LOCK=0`. Bei `LOCK=0` wird externer Hardware-Drift stattdessen konsistent übernommen: `performance` → `performance`, `balanced` → `balanced-performance`, `low-power` zusammen mit `balance_power` → `balanced-powersave`, andernfalls standardmäßig → `power-saver` — außer das ausstehende Plattformprofil ist exakt das eigene noch unbestätigte von `APPLIED`; dann wird es als eigener Nachzieh-Versuch behandelt statt als fremder Drift. Anschließend werden PPD, EPP, Plattformprofil und State auf denselben Zielmodus gebracht.
 - `battery-check` — liest UPower fail-closed (`gdbus call --system --dest org.freedesktop.UPower --object-path /org/freedesktop/UPower/devices/DisplayDevice ... Percentage` und `State`). Fehlende oder ungültige Daten verändern weder Hardware noch State. Unter 20% + discharging gilt `balanced-powersave` als Mindestprofil: Ist `SELECTED=power-saver`, bleibt beziehungsweise wird `power-saver` angewendet und `SAFETY=0` gesetzt; andernfalls wird bei Bedarf `SAFETY=1` und `APPLIED=balanced-powersave` gesetzt (`SELECTED` bleibt unberührt). Ab 25% oder bei externer Versorgung + `SAFETY==1` wird `SAFETY=0`, `APPLIED=SELECTED` und die ausgewählte Hardwarekonfiguration wiederhergestellt.
 - `restore` — wendet `APPLIED` auf Hardware an (Boot-Restore).
 - `status` — gibt State-File aus (Tests/README).

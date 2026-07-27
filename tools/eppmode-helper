@@ -54,8 +54,8 @@ mode_epp() {
 
 mode_platform_profile() {
 	case "$1" in
-		power-saver) printf '%s\n' low-power ;;
-		balanced-powersave|balanced-performance) printf '%s\n' balanced ;;
+		power-saver|balanced-powersave) printf '%s\n' low-power ;;
+		balanced-performance) printf '%s\n' balanced ;;
 		performance) printf '%s\n' performance ;;
 	esac
 }
@@ -437,14 +437,14 @@ mode_for_unlocked_hardware() {
 	platform_profile="$2"
 
 	case "$platform_profile" in
-		low-power) printf '%s\n' power-saver ;;
-		performance) printf '%s\n' performance ;;
-		balanced)
+		low-power)
 			case "$epp_mode" in
-				balanced-powersave|balanced-performance) printf '%s\n' "$epp_mode" ;;
-				*) printf '%s\n' balanced-performance ;;
+				power-saver|balanced-powersave) printf '%s\n' "$epp_mode" ;;
+				*) printf '%s\n' power-saver ;;
 			esac
 			;;
+		performance) printf '%s\n' performance ;;
+		balanced) printf '%s\n' balanced-performance ;;
 		"") [ -n "$epp_mode" ] && printf '%s\n' "$epp_mode" || return 1 ;;
 		*) return 1 ;;
 	esac
