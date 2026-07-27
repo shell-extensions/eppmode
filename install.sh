@@ -6,6 +6,9 @@ HELPER_NAME="eppmode-helper"
 HELPER_INSTALL_PATH="/usr/local/bin/${HELPER_NAME}"
 SUDOERS_FILE="/etc/sudoers.d/eppmode"
 STATE_DIR="/var/lib/eppmode"
+PPD_UNIT="power-profiles-daemon.service"
+PPD_DROPIN_DIR="/etc/systemd/system/${PPD_UNIT}.d"
+PPD_DROPIN="${PPD_DROPIN_DIR}/eppmode.conf"
 
 UNITS=(
   eppmode-restore.service
@@ -16,6 +19,7 @@ UNITS=(
   eppmode-battery.timer
 )
 UDEV_RULE="99-eppmode-power.rules"
+PPD_GUARD_SOURCE="eppmode-ppd-guard.conf"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -69,6 +73,7 @@ echo "Installing helper from ${tools_dir}/${HELPER_NAME} to ${HELPER_INSTALL_PAT
 sudo install -o root -g root -m 0755 "${tools_dir}/${HELPER_NAME}" "${HELPER_INSTALL_PATH}"
 
 sudo install -d -o root -g root -m 0755 "${STATE_DIR}"
+sudo rm -f "${STATE_DIR}/platform-profile-unreliable"
 
 sudo tee "${SUDOERS_FILE}" >/dev/null <<EOF
 ${target_user} ALL=(root) NOPASSWD: ${HELPER_INSTALL_PATH}
@@ -77,6 +82,16 @@ sudo chmod 0440 "${SUDOERS_FILE}"
 sudo visudo -c -f "${SUDOERS_FILE}" >/dev/null
 
 if command -v systemctl >/dev/null 2>&1; then
+  if systemctl cat "${PPD_UNIT}" >/dev/null 2>&1; then
+    if [[ ! -x /usr/libexec/power-profiles-daemon ]]; then
+      echo "Expected /usr/libexec/power-profiles-daemon was not found." >&2
+      exit 1
+    fi
+    sudo install -d -o root -g root -m 0755 "${PPD_DROPIN_DIR}"
+    sudo install -o root -g root -m 0644 \
+      "${tools_dir}/${PPD_GUARD_SOURCE}" "${PPD_DROPIN}"
+  fi
+
   for unit in "${UNITS[@]}"; do
     echo "Installing ${unit}"
     sudo install -o root -g root -m 0644 "${tools_dir}/${unit}" "/etc/systemd/system/${unit}"
@@ -92,6 +107,9 @@ if command -v systemctl >/dev/null 2>&1; then
   fi
 
   sudo systemctl daemon-reload
+  if systemctl cat "${PPD_UNIT}" >/dev/null 2>&1; then
+    sudo systemctl restart "${PPD_UNIT}"
+  fi
   sudo systemctl enable --now eppmode-restore.service
   sudo systemctl enable --now eppmode-reassert.path eppmode-reassert.timer
   sudo systemctl enable --now eppmode-battery.timer

@@ -19,6 +19,9 @@ UNITS=(
   eppmode-battery.timer
   eppmode-battery.service
 )
+PPD_UNIT="power-profiles-daemon.service"
+PPD_DROPIN="/etc/systemd/system/${PPD_UNIT}.d/eppmode.conf"
+PPD_DROPIN_DIR="/etc/systemd/system/${PPD_UNIT}.d"
 
 if command -v systemctl >/dev/null 2>&1; then
   # Disable one at a time: `systemctl disable --now A B C` fails atomically
@@ -43,12 +46,18 @@ $SUDO rm -f \
   /etc/systemd/system/multi-user.target.wants/eppmode-reassert.path \
   /etc/systemd/system/timers.target.wants/eppmode-reassert.timer \
   /etc/systemd/system/timers.target.wants/eppmode-battery.timer \
-  /etc/udev/rules.d/99-eppmode-power.rules
+  /etc/udev/rules.d/99-eppmode-power.rules \
+  "${PPD_DROPIN}"
+
+$SUDO rmdir "${PPD_DROPIN_DIR}" >/dev/null 2>&1 || true
 
 $SUDO rm -rf /var/lib/eppmode
 
 if command -v systemctl >/dev/null 2>&1; then
   $SUDO systemctl daemon-reload
+  if systemctl cat "${PPD_UNIT}" >/dev/null 2>&1; then
+    $SUDO systemctl restart "${PPD_UNIT}"
+  fi
 fi
 if command -v udevadm >/dev/null 2>&1; then
   $SUDO udevadm control --reload-rules

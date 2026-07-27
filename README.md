@@ -3,8 +3,7 @@
 [**English**](README.md) | [Deutsch](README.de.md) | [Español](README.es.md)
 
 A GNOME Shell (46+) Quick Settings extension for four fixed CPU
-energy-performance-preference (EPP) states, bypassing
-`power-profiles-daemon` entirely:
+energy-performance-preference (EPP) states:
 
 | Mode                    | EPP                    | `platform_profile` |
 |--------------------------|-------------------------|---------------------|
@@ -15,13 +14,33 @@ energy-performance-preference (EPP) states, bypassing
 
 Plus a **Lock** switch that blocks automatic (firmware/ACPI-hotkey) drift
 without affecting manual selection, and a **battery safety net** that
-forces `Balanced-Saver` below 20% while discharging, unaffected by Lock.
+enforces at least `Balanced-Saver` below 20% while discharging, unaffected
+by Lock. A manually selected `Power Saver` remains active.
 
 Successor to
 [`power-saver-epp-fix`](https://github.com/shell-extensions/power-saver-epp-fix);
 see [PLAN.md](PLAN.md) for the full design rationale.
 
 ![EPP Power Modes Quick Settings menu in German](image/eppmode-quick-settings.png)
+
+## Hardware status
+
+The tile reads every available CPU EPP value directly from sysfs. It refreshes
+after local changes, when the menu opens and every five seconds, so external
+EPP changes are visible even with Lock disabled. The four exact values map
+directly to the four modes above. Conflicting CPU values are shown as
+**Mixed**; unreadable or unsupported EPP values as **Unknown**.
+On systems without a `platform_profile` interface, EPP works independently.
+When the interface is available, the helper verifies that EPP and platform
+profile stay consistent. With Lock enabled, drift is reverted. With Lock
+disabled, external platform drift is adopted: `balanced` maps to
+`Balanced-Performance` unless the CPUs already expose `balance_power`.
+
+The installer keeps `power-profiles-daemon` active but restarts it with its
+`platform_profile` driver blocked, using the guard proven by
+`power-saver-epp-fix`. The helper first selects PPD's matching coarse profile,
+waits for its CPU write, then applies and verifies the exact EPP and platform
+state above. Uninstalling removes the guard and restarts PPD normally.
 
 ## Install
 

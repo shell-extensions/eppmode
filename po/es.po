@@ -11,7 +11,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: eppmode 1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-07-26 22:49+0200\n"
+"POT-Creation-Date: 2026-07-27 03:38+0200\n"
 "PO-Revision-Date: 2026-07-26 22:49+0200\n"
 "Last-Translator: EPP Power Modes contributors\n"
 "Language-Team: Spanish\n"
@@ -21,96 +21,110 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-#: extension.js:24
+#: extension.js:41
 msgctxt "power mode"
 msgid "Power Saver"
 msgstr "Ahorro de energía"
 
-#: extension.js:25
+#: extension.js:42
 msgctxt "tile subtitle"
 msgid "Saver"
 msgstr "Ahorro"
 
-#: extension.js:30
+#: extension.js:47
 msgctxt "power mode"
 msgid "Balanced-Saver"
 msgstr "Equilibrado-Ahorro"
 
-#: extension.js:31
+#: extension.js:48
 msgctxt "tile subtitle"
 msgid "Balanced −"
 msgstr "Equilibrado −"
 
-#: extension.js:36
+#: extension.js:53
 msgctxt "power mode"
 msgid "Balanced-Performance"
 msgstr "Equilibrado-Rendimiento"
 
-#: extension.js:37
+#: extension.js:54
 msgctxt "tile subtitle"
 msgid "Balanced +"
 msgstr "Equilibrado +"
 
-#: extension.js:42
+#: extension.js:59
 msgctxt "power mode"
 msgid "Performance"
 msgstr "Rendimiento"
 
-#: extension.js:43
+#: extension.js:60
 msgctxt "tile subtitle"
 msgid "Performance"
 msgstr "Rendimiento"
 
-#: extension.js:65
+#: extension.js:74
+msgctxt "hardware status"
+msgid "Mixed"
+msgstr "Mixto"
+
+#: extension.js:78
+msgctxt "hardware status"
+msgid "Unknown"
+msgstr "Desconocido"
+
+#: extension.js:112
 msgid "Power"
 msgstr "Energía"
 
-#: extension.js:98
+#: extension.js:145
 msgid "Lock"
 msgstr "Bloquear"
 
-#: extension.js:103
+#: extension.js:150
 msgid "Power Settings"
 msgstr "Configuración de energía"
 
-#: extension.js:174
+#: extension.js:223
 msgid "Setup required"
 msgstr "Configuración necesaria"
 
-#: extension.js:174
+#: extension.js:223
 msgid "Run the install script once to allow passwordless access to the helper."
-msgstr "Ejecute el script de instalación una vez para permitir el acceso sin contraseña al ayudante."
+msgstr ""
+"Ejecute el script de instalación una vez para permitir el acceso sin "
+"contraseña al ayudante."
 
-#: extension.js:180 extension.js:263 extension.js:273
+#: extension.js:229 extension.js:441 extension.js:450
 msgid "Error"
 msgstr "Error"
 
-#: extension.js:180
+#: extension.js:229
 msgid "sudo was not found on this system."
 msgstr "No se encontró sudo en este sistema."
 
-#: extension.js:263
+#: extension.js:441
 msgid "Could not apply the power mode."
 msgstr "No se pudo aplicar el modo de energía."
 
-#: extension.js:273
+#: extension.js:450
 msgid "Could not change the lock state."
 msgstr "No se pudo cambiar el estado de bloqueo."
 
-#: extension.js:305
+#: extension.js:482
 msgid ""
 "This extension needs root access to control the CPU energy-performance-"
 "preference."
-msgstr "Esta extensión necesita acceso root para controlar la preferencia de rendimiento energético de la CPU."
+msgstr ""
+"Esta extensión necesita acceso root para controlar la preferencia de "
+"rendimiento energético de la CPU."
 
-#: extension.js:306
+#: extension.js:483
 msgid "Run the install script once:"
 msgstr "Ejecute el script de instalación una vez:"
 
-#: extension.js:308
+#: extension.js:485
 msgid "Then restart GNOME Shell or disable/enable the extension."
 msgstr "Luego reinicie GNOME Shell o desactive/active la extensión."
 
-#: extension.js:311
+#: extension.js:488
 msgid "Close"
 msgstr "Cerrar"

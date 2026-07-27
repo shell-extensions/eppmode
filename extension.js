@@ -15,6 +15,9 @@ const HELPER_PATH = '/usr/local/bin/eppmode-helper';
 const STATE_DIR_PATH = '/var/lib/eppmode';
 const STATE_FILE_NAME = 'state';
 const STATE_FILE_PATH = `${STATE_DIR_PATH}/${STATE_FILE_NAME}`;
+const CPU_SYSFS_PATH = '/sys/devices/system/cpu';
+const EPP_FILE_NAME = 'energy_performance_preference';
+const HARDWARE_POLL_SECONDS = 5;
 const TEXT_DECODER = new TextDecoder('utf-8');
 
 // Row directly below hotspot's own fixed TARGET_POSITION=4 (hotspot@yurij.de),
@@ -57,6 +60,36 @@ const MODES = [
         tileLabel: () => pgettext('tile subtitle', 'Performance'),
     },
 ];
+
+const EPP_TO_MODE = new Map([
+    ['power', 'power-saver'],
+    ['balance_power', 'balanced-powersave'],
+    ['balance_performance', 'balanced-performance'],
+    ['performance', 'performance'],
+]);
+
+const HARDWARE_STATUS_PRESENTATION = {
+    mixed: {
+        icon: 'dialog-warning-symbolic',
+        tileLabel: () => pgettext('hardware status', 'Mixed'),
+    },
+    unknown: {
+        icon: 'dialog-question-symbolic',
+        tileLabel: () => pgettext('hardware status', 'Unknown'),
+    },
+};
+
+function detectHardwareMode(eppValues) {
+    if (eppValues.length === 0)
+        return 'unknown';
+
+    const uniqueEppValues = new Set(eppValues);
+    if (uniqueEppValues.size !== 1)
+        return 'mixed';
+
+    const [epp] = uniqueEppValues;
+    return EPP_TO_MODE.get(epp) ?? 'unknown';
+}
 
 function parseStateFile(text) {
     const state = {};
@@ -127,60 +160,51 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
         this._clickedId = this.connect('clicked', () => this._cycleMode());
         this._menuOpenId = this.menu.connect('open-state-changed', (menu, isOpen) => {
             if (isOpen)
-                this._refreshFromStateFile();
+                this._refreshFromSystem();
         });
 
         this._startStateMonitor();
-        this._refreshFromStateFile();
+        this._startHardwarePoll();
+        this._refreshFromSystem();
     }
 
     _runCommand(command) {
         return new Promise((resolve, reject) => {
+            let subprocess;
             try {
-                const [success, pid, , , stderr] = GLib.spawn_async_with_pipes(
-                    null,
+                subprocess = Gio.Subprocess.new(
                     command,
-                    null,
-                    GLib.SpawnFlags.SEARCH_PATH | GLib.SpawnFlags.DO_NOT_REAP_CHILD,
-                    null
+                    Gio.SubprocessFlags.STDOUT_SILENCE |
+                    Gio.SubprocessFlags.STDERR_PIPE
                 );
-
-                if (!success) {
-                    reject(new Error('Failed to start the command.'));
-                    return;
-                }
-
-                const stderrStream = new Gio.DataInputStream({
-                    base_stream: new Gio.UnixInputStream({ fd: stderr, close_fd: true }),
-                });
-
-                let errorOutput = '';
-                const readStderr = () => {
-                    stderrStream.read_line_async(GLib.PRIORITY_DEFAULT, null, (source, res) => {
-                        const [line] = source.read_line_finish(res);
-                        if (line) {
-                            errorOutput += TEXT_DECODER.decode(line) + '\n';
-                            readStderr();
-                        }
-                    });
-                };
-                readStderr();
-
-                GLib.child_watch_add(GLib.PRIORITY_DEFAULT, pid, (p, status) => {
-                    try {
-                        if (GLib.spawn_check_exit_status(status)) {
-                            resolve();
-                        } else {
-                            reject(new Error(`Command failed with status ${status}\n${errorOutput}`));
-                        }
-                    } catch (error) {
-                        error.stderrOutput = errorOutput;
-                        reject(error);
-                    }
-                });
             } catch (error) {
                 reject(error);
+                return;
             }
+
+            subprocess.communicate_utf8_async(null, null, (source, result) => {
+                try {
+                    const [, , stderr] = source.communicate_utf8_finish(result);
+                    if (source.get_successful()) {
+                        resolve();
+                    } else {
+                        const status = source.get_if_exited()
+                            ? source.get_exit_status()
+                            : `signal ${source.get_term_sig()}`;
+                        const error = new Error(
+                            `Command failed with ${status}\n${stderr ?? ''}`);
+                        error.stderrOutput = stderr ?? '';
+                        reject(error);
+                    }
+                } catch (error) {
+                    try {
+                        error.stderrOutput ??= '';
+                    } catch {
+                        // Some Gio errors are not extensible JavaScript objects.
+                    }
+                    reject(error);
+                }
+            });
         });
     }
 
@@ -270,21 +294,83 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
             return;
         this._refreshSourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
             this._refreshSourceId = 0;
-            this._refreshFromStateFile();
+            this._refreshFromSystem();
             return GLib.SOURCE_REMOVE;
         });
     }
 
-    _refreshFromStateFile() {
+    _readTextFile(path) {
+        try {
+            const [ok, contents] = GLib.file_get_contents(path);
+            if (!ok || contents === null)
+                return null;
+            return TEXT_DECODER.decode(contents).trim();
+        } catch (error) {
+            console.error(`EPP Power Modes: error reading ${path}`, error);
+            return null;
+        }
+    }
+
+    _readHardwareMode() {
+        const eppValues = [];
+        let enumerator = null;
+
+        try {
+            const cpuDirectory = Gio.File.new_for_path(CPU_SYSFS_PATH);
+            enumerator = cpuDirectory.enumerate_children(
+                'standard::name',
+                Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS,
+                null);
+
+            let info;
+            while ((info = enumerator.next_file(null)) !== null) {
+                const cpuName = info.get_name();
+                if (!/^cpu[0-9]+$/.test(cpuName))
+                    continue;
+
+                const eppPath = `${CPU_SYSFS_PATH}/${cpuName}/cpufreq/${EPP_FILE_NAME}`;
+                if (!GLib.file_test(eppPath, GLib.FileTest.EXISTS))
+                    continue;
+
+                const epp = this._readTextFile(eppPath);
+                if (!epp)
+                    return 'unknown';
+                eppValues.push(epp);
+            }
+        } catch (error) {
+            console.error('EPP Power Modes: error enumerating CPU EPP state', error);
+            return 'unknown';
+        } finally {
+            try {
+                enumerator?.close(null);
+            } catch (error) {
+                console.error('EPP Power Modes: error closing CPU EPP enumerator', error);
+            }
+        }
+
+        return detectHardwareMode(eppValues);
+    }
+
+    _startHardwarePoll() {
+        this._hardwarePollSourceId = GLib.timeout_add_seconds(
+            GLib.PRIORITY_DEFAULT,
+            HARDWARE_POLL_SECONDS,
+            () => {
+                if (!this._busy)
+                    this._refreshFromSystem();
+                return GLib.SOURCE_CONTINUE;
+            });
+    }
+
+    _refreshFromSystem({ viaClick = false } = {}) {
         const state = this._readStateFile();
         this._setLockIndicator(state?.LOCK === '1');
-        // While our own `set` is in flight the helper has often already
-        // written the target to disk before the promise resolves; skipping
-        // the mode update here avoids a visible flicker back to the old
-        // value. _applyMode()'s own .then()/.catch() reconciles afterwards.
+        // EPP values are written CPU by CPU, followed by platform_profile.
+        // Avoid exposing that brief intermediate combination as "Mixed";
+        // _applyMode() reconciles from hardware after the helper exits.
         if (this._busy)
             return;
-        this._setAppliedMode(state?.APPLIED ?? 'balanced-performance');
+        this._setAppliedMode(this._readHardwareMode(), { viaClick });
     }
 
     _setLockIndicator(locked) {
@@ -294,29 +380,35 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
     }
 
     _setAppliedMode(id, { viaClick = false } = {}) {
-        const mode = MODES.find(m => m.id === id) ?? MODES[2];
+        const mode = MODES.find(m => m.id === id);
+        const presentation = mode ??
+            HARDWARE_STATUS_PRESENTATION[id] ??
+            HARDWARE_STATUS_PRESENTATION.unknown;
+        const appliedId = mode
+            ? mode.id
+            : (Object.hasOwn(HARDWARE_STATUS_PRESENTATION, id) ? id : 'unknown');
 
         // Track what was active immediately before this change, and whether
         // the change came from a tile click, so _cycleMode() can decide
         // between "jump back to previous" and "keep cycling forward".
         // Guarded on `!== undefined` so the very first sync at startup never
         // records a bogus "previous" state.
-        const changed = this._appliedId !== undefined && this._appliedId !== mode.id;
+        const changed = this._appliedId !== undefined && this._appliedId !== appliedId;
         if (changed) {
             this._previousId = this._appliedId;
             this._lastChangeWasClick = viaClick;
         }
-        this._appliedId = mode.id;
+        this._appliedId = appliedId;
 
         for (const [modeId, item] of this._modeItems)
-            item._tick.visible = modeId === mode.id;
-        this.iconName = mode.icon;
-        this._indicator.icon_name = mode.icon;
-        this.subtitle = mode.tileLabel();
-        this.menu.setHeader(mode.icon, 'EPP Power Modes');
+            item._tick.visible = modeId === appliedId;
+        this.iconName = presentation.icon;
+        this._indicator.icon_name = presentation.icon;
+        this.subtitle = presentation.tileLabel();
+        this.menu.setHeader(presentation.icon, 'EPP Power Modes');
         // Mirror GNOME's own PowerProfilesToggle: highlighted only away from
         // the balanced middle, i.e. for the two non-balanced extremes.
-        this.checked = mode.id === 'power-saver' || mode.id === 'performance';
+        this.checked = appliedId === 'power-saver' || appliedId === 'performance';
     }
 
     // Click on the tile body: one step forward, wrapping around — unless the
@@ -326,9 +418,12 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
     // after continues the forward cycle.
     _cycleMode() {
         const currentIndex = MODES.findIndex(m => m.id === this._appliedId);
-        const base = currentIndex === -1 ? 0 : currentIndex;
-        const sequentialNext = MODES[(base + 1) % MODES.length].id;
-        const target = this._lastChangeWasClick ? sequentialNext : (this._previousId ?? sequentialNext);
+        const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % MODES.length;
+        const sequentialNext = MODES[nextIndex].id;
+        const previousIsMode = MODES.some(mode => mode.id === this._previousId);
+        const target = !this._lastChangeWasClick && previousIsMode
+            ? this._previousId
+            : sequentialNext;
         this._applyMode(target, { viaClick: true });
     }
 
@@ -339,13 +434,13 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
 
         this._runHelperCommand(['set', id]).then(() => {
             this._busy = false;
-            this._setAppliedMode(id, { viaClick });
+            this._refreshFromSystem({ viaClick });
         }).catch(error => {
             this._busy = false;
             if (!error?.handled)
                 Main.notify(_('Error'), _('Could not apply the power mode.'));
             console.error('EPP Power Modes: error applying mode', error);
-            this._refreshFromStateFile();
+            this._refreshFromSystem();
         });
     }
 
@@ -398,6 +493,10 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
         if (this._refreshSourceId) {
             GLib.Source.remove(this._refreshSourceId);
             this._refreshSourceId = 0;
+        }
+        if (this._hardwarePollSourceId) {
+            GLib.Source.remove(this._hardwarePollSourceId);
+            this._hardwarePollSourceId = 0;
         }
         if (this._clickedId) {
             this.disconnect(this._clickedId);
@@ -493,6 +592,10 @@ export default class EppModesExtension extends Extension {
         Main.panel.statusArea.quickSettings.addExternalIndicator(this._indicator);
         this._indicator.moveToDefaultPosition();
 
+        this._nativeIndicatorVisibility = undefined;
+        this._nativeItemVisibility = null;
+        this._nativePowerProfileItem = null;
+
         // Best-effort: hide GNOME's own power-profile toggle so the two
         // controllers don't visually compete. Never a hard requirement —
         // _powerProfiles is an undocumented internal, confirmed present in
@@ -511,8 +614,12 @@ export default class EppModesExtension extends Extension {
             const native = Main.panel.statusArea.quickSettings._powerProfiles;
             if (native) {
                 this._nativeToggle = native;
+                this._nativeIndicatorVisibility = native.visible;
+                this._nativeItemVisibility = new Map(
+                    native.quickSettingsItems.map(item => [item, item.visible]));
                 const [toggle] = native.quickSettingsItems;
                 if (toggle) {
+                    this._nativePowerProfileItem = toggle;
                     this._injectionManager = new InjectionManager();
                     this._injectionManager.overrideMethod(
                         toggle.constructor.prototype, '_sync', originalSync => {
@@ -538,11 +645,22 @@ export default class EppModesExtension extends Extension {
         }
 
         if (this._nativeToggle) {
-            this._nativeToggle.visible = true;
-            for (const item of this._nativeToggle.quickSettingsItems)
-                item.visible = true;
+            if (this._nativeIndicatorVisibility !== undefined)
+                this._nativeToggle.visible = this._nativeIndicatorVisibility;
+            for (const item of this._nativeToggle.quickSettingsItems) {
+                if (this._nativeItemVisibility?.has(item))
+                    item.visible = this._nativeItemVisibility.get(item);
+            }
+            try {
+                this._nativePowerProfileItem?._sync();
+            } catch (error) {
+                console.error('EPP Power Modes: could not resync native power profile toggle', error);
+            }
             this._nativeToggle = null;
         }
+        this._nativeIndicatorVisibility = undefined;
+        this._nativeItemVisibility = null;
+        this._nativePowerProfileItem = null;
 
         if (this._indicator) {
             this._indicator.quickSettingsItems.forEach(item => item.destroy());

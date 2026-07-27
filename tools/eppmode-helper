@@ -22,7 +22,7 @@ Commands:
   set <state>      Apply one of the four fixed modes immediately.
   lock             Block automatic (drift) changes.
   unlock           Allow automatic changes again.
-  reassert         No-op unless locked; re-applies APPLIED if locked.
+  reassert         Re-apply APPLIED if locked; otherwise adopt hardware drift.
   battery-check    Read UPower and enforce/lift the battery safety net.
   restore          Apply APPLIED to hardware (boot restore).
   status           Print the state file.
@@ -35,6 +35,11 @@ has_word() {
 		*" $2 "*) return 0 ;;
 		*) return 1 ;;
 	esac
+}
+
+report_error() {
+	printf '%s\n' "$1" >&2
+	logger -t eppmode "$1" || true
 }
 
 mode_epp() {
@@ -54,6 +59,14 @@ mode_platform_profile() {
 	esac
 }
 
+mode_ppd_profile() {
+	case "$1" in
+		power-saver) printf '%s\n' power-saver ;;
+		balanced-powersave|balanced-performance) printf '%s\n' balanced ;;
+		performance) printf '%s\n' performance ;;
+	esac
+}
+
 mode_is_valid() {
 	case "$1" in
 		power-saver|balanced-powersave|balanced-performance|performance) return 0 ;;
@@ -61,8 +74,31 @@ mode_is_valid() {
 	esac
 }
 
+sync_power_profiles_daemon() {
+	if ! command -v systemctl >/dev/null 2>&1 ||
+		! systemctl is-active --quiet power-profiles-daemon.service 2>/dev/null; then
+		return 0
+	fi
+	if ! command -v powerprofilesctl >/dev/null 2>&1; then
+		report_error "power-profiles-daemon is active but powerprofilesctl is unavailable"
+		return 1
+	fi
+
+	target_profile="$(mode_ppd_profile "$1")"
+	if ! powerprofilesctl set "$target_profile" >/dev/null 2>&1; then
+		report_error "Failed to synchronize power-profiles-daemon to $target_profile"
+		return 1
+	fi
+
+	# PPD applies its CPU driver asynchronously. Match the proven guard order
+	# from power-saver-epp-fix before refining its three profiles to four EPPs.
+	sleep "${EPPMODE_PPD_DELAY:-0.2}"
+}
+
 apply_epp() {
 	target_epp="$(mode_epp "$1")"
+	found=0
+	failed=0
 
 	available_file=
 	for f in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/energy_performance_available_preferences \
@@ -76,45 +112,124 @@ apply_epp() {
 	if [ -n "$available_file" ]; then
 		available="$(cat "$available_file")"
 		if ! has_word "$available" "$target_epp"; then
-			logger -t eppmode "EPP preference '$target_epp' is not available: $available"
-			return 0
+			report_error "EPP preference '$target_epp' is not available: $available"
+			return 1
 		fi
 	fi
 
 	for f in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/energy_performance_preference; do
 		[ -e "$f" ] || continue
+		found=1
 		current="$(cat "$f" 2>/dev/null || true)"
 		if [ "$current" != "$target_epp" ]; then
-			printf '%s\n' "$target_epp" > "$f" 2>/dev/null || \
-				logger -t eppmode "Failed to set $f to $target_epp"
+			if ! printf '%s\n' "$target_epp" > "$f" 2>/dev/null; then
+				report_error "Failed to set $f to $target_epp"
+				failed=1
+				continue
+			fi
+		fi
+		current="$(cat "$f" 2>/dev/null || true)"
+		if [ "$current" != "$target_epp" ]; then
+			report_error "Failed to verify $f after setting it to $target_epp"
+			failed=1
 		fi
 	done
+
+	if [ "$found" -eq 0 ]; then
+		report_error "No CPU EPP control files were found"
+		return 1
+	fi
+	[ "$failed" -eq 0 ]
 }
 
 apply_platform_profile() {
 	platform_profile_file=/sys/firmware/acpi/platform_profile
 	platform_profile_choices_file=/sys/firmware/acpi/platform_profile_choices
 
-	[ -w "$platform_profile_file" ] || return 0
+	[ -e "$platform_profile_file" ] || return 0
 	[ -r "$platform_profile_choices_file" ] || return 0
+	if [ ! -w "$platform_profile_file" ]; then
+		report_error "platform_profile exists but is not writable"
+		return 1
+	fi
 
 	target_platform="$(mode_platform_profile "$1")"
 	choices="$(cat "$platform_profile_choices_file" 2>/dev/null || true)"
 	if ! has_word "$choices" "$target_platform"; then
-		logger -t eppmode "platform_profile '$target_platform' is not available: $choices"
+		logger -t eppmode "platform_profile '$target_platform' is not available: $choices" || true
 		return 0
 	fi
 
-	current_platform="$(cat "$platform_profile_file" 2>/dev/null || true)"
-	if [ "$current_platform" != "$target_platform" ]; then
-		printf '%s\n' "$target_platform" > "$platform_profile_file" 2>/dev/null || \
-			logger -t eppmode "Failed to set platform_profile to $target_platform"
-	fi
+	attempt=1
+	while [ "$attempt" -le 3 ]; do
+		current_platform="$(cat "$platform_profile_file" 2>/dev/null || true)"
+		if [ "$current_platform" != "$target_platform" ]; then
+			if ! printf '%s\n' "$target_platform" > "$platform_profile_file" 2>/dev/null; then
+				report_error "Failed to set platform_profile to $target_platform"
+				return 1
+			fi
+		fi
+		sleep "${EPPMODE_PLATFORM_DELAY:-0.2}"
+		current_platform="$(cat "$platform_profile_file" 2>/dev/null || true)"
+		[ "$current_platform" = "$target_platform" ] && return 0
+		attempt=$((attempt + 1))
+	done
+
+	report_error "platform_profile did not retain $target_platform after 3 attempts"
+	return 1
 }
 
 apply_hardware() {
-	apply_epp "$1"
+	sync_power_profiles_daemon "$1" || return 1
+	apply_epp "$1" || return 1
 	apply_platform_profile "$1"
+}
+
+read_epp_mode() {
+	found=0
+	actual_epp=
+	for f in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/energy_performance_preference; do
+		[ -r "$f" ] || continue
+		current="$(cat "$f" 2>/dev/null)" || return 1
+		if [ "$found" -eq 1 ] && [ "$current" != "$actual_epp" ]; then
+			return 1
+		fi
+		found=1
+		actual_epp="$current"
+	done
+	[ "$found" -eq 1 ] || return 1
+
+	case "$actual_epp" in
+		power) printf '%s\n' power-saver ;;
+		balance_power) printf '%s\n' balanced-powersave ;;
+		balance_performance) printf '%s\n' balanced-performance ;;
+		performance) printf '%s\n' performance ;;
+		*) return 1 ;;
+	esac
+}
+
+read_platform_profile() {
+	platform_profile_file=/sys/firmware/acpi/platform_profile
+	[ -r "$platform_profile_file" ] || return 0
+	cat "$platform_profile_file" 2>/dev/null
+}
+
+mode_for_unlocked_hardware() {
+	epp_mode="$1"
+	platform_profile="$2"
+
+	case "$platform_profile" in
+		low-power) printf '%s\n' power-saver ;;
+		performance) printf '%s\n' performance ;;
+		balanced)
+			case "$epp_mode" in
+				balanced-powersave|balanced-performance) printf '%s\n' "$epp_mode" ;;
+				*) printf '%s\n' balanced-performance ;;
+			esac
+			;;
+		"") [ -n "$epp_mode" ] && printf '%s\n' "$epp_mode" || return 1 ;;
+		*) return 1 ;;
+	esac
 }
 
 read_state_value() {
@@ -157,14 +272,15 @@ cmd_set() {
 	target="$1"
 	mode_is_valid "$target" || { echo "Unknown mode: $target" >&2; exit 1; }
 	lock="$(current_or_default LOCK 0)"
-	write_state "$target" "$target" "$lock" 0
 	apply_hardware "$target"
+	write_state "$target" "$target" "$lock" 0
 }
 
 cmd_lock() {
 	selected="$(current_or_default SELECTED balanced-performance)"
 	applied="$(current_or_default APPLIED balanced-performance)"
 	safety="$(current_or_default SAFETY 0)"
+	apply_hardware "$applied"
 	write_state "$selected" "$applied" 1 "$safety"
 }
 
@@ -177,25 +293,78 @@ cmd_unlock() {
 
 cmd_reassert() {
 	lock="$(current_or_default LOCK 0)"
-	[ "$lock" = "1" ] || exit 0
 	applied="$(current_or_default APPLIED balanced-performance)"
-	apply_hardware "$applied"
+	selected="$(current_or_default SELECTED "$applied")"
+	safety="$(current_or_default SAFETY 0)"
+
+	if [ "$lock" = "1" ] || [ "$safety" = "1" ]; then
+		apply_hardware "$applied"
+		return
+	fi
+
+	epp_mode="$(read_epp_mode 2>/dev/null || true)"
+	platform_profile="$(read_platform_profile)"
+	target="$(mode_for_unlocked_hardware "$epp_mode" "$platform_profile" 2>/dev/null || true)"
+	if [ -z "$target" ]; then
+		report_error "Could not reconcile unlocked hardware state"
+		return 1
+	fi
+
+	expected_platform="$(mode_platform_profile "$applied")"
+	if [ "$epp_mode" = "$applied" ] &&
+		{ [ -z "$platform_profile" ] || [ "$platform_profile" = "$expected_platform" ]; }; then
+		return
+	fi
+
+	apply_hardware "$target"
+	write_state "$target" "$target" 0 0
 }
 
-# UPower state values: 2 = discharging. See org.freedesktop.UPower.Device.
+# UPower state values: 1=charging, 2=discharging, 3=empty,
+# 4=fully-charged, 5=pending-charge, 6=pending-discharge.
 cmd_battery_check() {
 	percent="${FAKE_PERCENT:-}"
 	state="${FAKE_STATE:-}"
 
-	if [ -z "$percent" ] || [ -z "$state" ]; then
-		reply="$(gdbus call --system \
+	if [ -z "$percent" ] && [ -z "$state" ]; then
+		if ! reply="$(gdbus call --system \
 			--dest org.freedesktop.UPower \
 			--object-path /org/freedesktop/UPower/devices/DisplayDevice \
 			--method org.freedesktop.DBus.Properties.GetAll \
-			org.freedesktop.UPower.Device 2>/dev/null || true)"
-		percent="$(printf '%s' "$reply" | grep -oE "'Percentage': <[0-9.]+>" | grep -oE '[0-9.]+' || echo 100)"
-		state_num="$(printf '%s' "$reply" | grep -oE "'State': <uint32 [0-9]+>" | grep -oE '[0-9]+' || echo 0)"
-		[ "$state_num" = "2" ] && state=discharging || state=other
+			org.freedesktop.UPower.Device 2>/dev/null)"; then
+			report_error "Could not read battery data from UPower"
+			return 1
+		fi
+		percent="$(printf '%s\n' "$reply" |
+			sed -n "s/.*'Percentage': <\([0-9][0-9.]*\)>.*/\1/p")"
+		state_num="$(printf '%s\n' "$reply" |
+			sed -n "s/.*'State': <uint32 \([0-9][0-9]*\)>.*/\1/p")"
+		case "$state_num" in
+			2|3|6) state=discharging ;;
+			1|4|5) state=external-power ;;
+			*)
+				report_error "UPower returned an unknown or missing battery state"
+				return 1
+				;;
+		esac
+	elif [ -z "$percent" ] || [ -z "$state" ]; then
+		report_error "FAKE_PERCENT and FAKE_STATE must be set together"
+		return 1
+	else
+		case "$state" in
+			discharging) ;;
+			charging|external-power) state=external-power ;;
+			*)
+				report_error "Unknown FAKE_STATE: $state"
+				return 1
+				;;
+		esac
+	fi
+
+	if ! awk -v p="$percent" \
+		'BEGIN { exit !(p ~ /^[0-9]+([.][0-9]+)?$/ && p >= 0 && p <= 100) }'; then
+		report_error "Invalid battery percentage: $percent"
+		return 1
 	fi
 
 	selected="$(current_or_default SELECTED balanced-performance)"
@@ -206,12 +375,19 @@ cmd_battery_check() {
 	is_below="$(awk -v p="$percent" 'BEGIN { print (p < 20) ? 1 : 0 }')"
 	is_above="$(awk -v p="$percent" 'BEGIN { print (p >= 25) ? 1 : 0 }')"
 
-	if [ "$state" = "discharging" ] && [ "$is_below" = "1" ] && [ "$safety" != "1" ]; then
-		write_state "$selected" balanced-powersave "$lock" 1
-		apply_hardware balanced-powersave
-	elif { [ "$state" != "discharging" ] || [ "$is_above" = "1" ]; } && [ "$safety" = "1" ]; then
-		write_state "$selected" "$selected" "$lock" 0
+	if [ "$state" = "discharging" ] && [ "$is_below" = "1" ]; then
+		if [ "$selected" = "power-saver" ]; then
+			if [ "$applied" != "power-saver" ] || [ "$safety" != "0" ]; then
+				apply_hardware power-saver
+				write_state power-saver power-saver "$lock" 0
+			fi
+		elif [ "$safety" != "1" ]; then
+			apply_hardware balanced-powersave
+			write_state "$selected" balanced-powersave "$lock" 1
+		fi
+	elif { [ "$state" = "external-power" ] || [ "$is_above" = "1" ]; } && [ "$safety" = "1" ]; then
 		apply_hardware "$selected"
+		write_state "$selected" "$selected" "$lock" 0
 	fi
 }
 
@@ -221,8 +397,8 @@ cmd_restore() {
 	selected="$(current_or_default SELECTED "$applied")"
 	lock="$(current_or_default LOCK 0)"
 	safety="$(current_or_default SAFETY 0)"
-	[ -f "$STATE_FILE" ] || write_state "$selected" "$applied" "$lock" "$safety"
 	apply_hardware "$applied"
+	[ -f "$STATE_FILE" ] || write_state "$selected" "$applied" "$lock" "$safety"
 }
 
 cmd_status() {

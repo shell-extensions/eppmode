@@ -3,8 +3,7 @@
 [English](README.md) | [**Deutsch**](README.de.md) | [Español](README.es.md)
 
 Eine Schnelleinstellungen-Erweiterung für GNOME Shell (46+) mit vier festen
-Zuständen für die CPU-Energie-Leistungs-Voreinstellung (EPP), die
-`power-profiles-daemon` vollständig umgeht:
+Zuständen für die CPU-Energie-Leistungs-Voreinstellung (EPP):
 
 | Modus                  | EPP                   | `platform_profile` |
 |------------------------|-----------------------|--------------------|
@@ -16,13 +15,35 @@ Zuständen für die CPU-Energie-Leistungs-Voreinstellung (EPP), die
 Dazu kommen ein **Sperren**-Schalter, der automatische Abweichungen durch
 Firmware oder ACPI-Hotkeys verhindert, ohne die manuelle Auswahl
 einzuschränken, und ein **Akku-Sicherheitsnetz**. Dieses erzwingt beim Entladen
-unter 20 % den Modus `Ausgeglichen-Sparsam`, unabhängig vom Sperrzustand.
+unter 20 % mindestens den Modus `Ausgeglichen-Sparsam`, unabhängig vom
+Sperrzustand. Ein manuell gewählter Modus `Energie sparen` bleibt aktiv.
 
 Nachfolger von
 [`power-saver-epp-fix`](https://github.com/shell-extensions/power-saver-epp-fix);
 die vollständige Designbegründung steht in [PLAN.md](PLAN.md).
 
 ![Schnelleinstellungsmenü von EPP Power Modes](image/eppmode-quick-settings.png)
+
+## Hardwarestatus
+
+Die Kachel liest den EPP-Wert jeder verfügbaren CPU direkt aus sysfs. Sie
+aktualisiert sich nach eigenen Änderungen, beim Öffnen des Menüs und alle fünf
+Sekunden. Dadurch werden externe EPP-Änderungen auch bei deaktivierter Sperre
+sichtbar. Die vier exakten Werte werden direkt auf die vier Modi aus der
+Tabelle abgebildet. Abweichende CPU-Werte erscheinen als **Uneinheitlich**,
+nicht lesbare oder nicht unterstützte EPP-Werte als **Unbekannt**.
+Wenn `platform_profile` vorhanden ist, prüft der Helfer, dass EPP und
+Plattformprofil konsistent bleiben. Bei aktiver Sperre wird eine Abweichung
+zurückgesetzt. Bei gelöster Sperre wird eine externe Plattformänderung
+übernommen: `balanced` wird zu `Ausgeglichen-Leistung`, sofern die CPUs nicht
+bereits `balance_power` melden.
+
+Der Installer lässt `power-profiles-daemon` aktiv, startet ihn aber mit
+blockiertem `platform_profile`-Treiber neu. Dazu verwendet er den bereits in
+`power-saver-epp-fix` bewährten Guard. Der Helfer wählt zunächst PPDs passendes
+grobes Profil, wartet dessen CPU-Schreibvorgang ab und setzt und prüft danach
+den exakten EPP- und Plattformzustand aus der Tabelle. Die Deinstallation
+entfernt den Guard und startet PPD wieder normal.
 
 ## Installation
 

@@ -3,8 +3,7 @@
 [English](README.md) | [Deutsch](README.de.md) | [**Español**](README.es.md)
 
 Una extensión de Ajustes rápidos para GNOME Shell (46+) con cuatro estados
-fijos de preferencia de rendimiento energético (EPP) de la CPU, que evita por
-completo `power-profiles-daemon`:
+fijos de preferencia de rendimiento energético (EPP) de la CPU:
 
 | Modo                     | EPP                   | `platform_profile` |
 |--------------------------|-----------------------|--------------------|
@@ -15,14 +14,37 @@ completo `power-profiles-daemon`:
 
 También incluye un interruptor **Bloquear** que impide cambios automáticos
 causados por el firmware o las teclas ACPI sin afectar a la selección manual,
-y una **protección de batería**. Esta fuerza el modo `Equilibrado-Ahorro` al
-bajar del 20 % durante la descarga, independientemente del bloqueo.
+y una **protección de batería**. Esta fuerza como mínimo el modo
+`Equilibrado-Ahorro` al bajar del 20 % durante la descarga, independientemente
+del bloqueo. Un modo `Ahorro de energía` seleccionado manualmente permanece
+activo.
 
 Sucesor de
 [`power-saver-epp-fix`](https://github.com/shell-extensions/power-saver-epp-fix);
 consulte [PLAN.md](PLAN.md) para ver la justificación completa del diseño.
 
 ![Menú de Ajustes rápidos de EPP Power Modes](image/eppmode-quick-settings.png)
+
+## Estado del hardware
+
+El mosaico lee directamente de sysfs el valor EPP de cada CPU disponible. Se
+actualiza después de los cambios propios, al abrir el menú y cada cinco
+segundos. De esta forma, los cambios EPP externos son visibles incluso con el
+bloqueo desactivado. Los cuatro valores exactos se asignan directamente a los
+cuatro modos de la tabla. Los valores de CPU divergentes se muestran como
+**Mixto** y los valores EPP ilegibles o no compatibles como **Desconocido**.
+Cuando existe `platform_profile`, el ayudante verifica que EPP y el perfil de
+plataforma permanezcan coherentes. Con el bloqueo activado, revierte cualquier
+desviación. Con el bloqueo desactivado, adopta los cambios externos:
+`balanced` se convierte en `Equilibrado-Rendimiento`, salvo que las CPU ya
+indiquen `balance_power`.
+
+El instalador mantiene activo `power-profiles-daemon`, pero lo reinicia con su
+controlador `platform_profile` bloqueado mediante la protección ya probada en
+`power-saver-epp-fix`. El ayudante selecciona primero el perfil general
+correspondiente de PPD, espera a que termine su escritura de CPU y después
+aplica y verifica el estado EPP y de plataforma exacto de la tabla. La
+desinstalación elimina la protección y reinicia PPD normalmente.
 
 ## Instalación
 
