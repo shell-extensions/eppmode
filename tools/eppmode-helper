@@ -6,6 +6,7 @@ set -eu
 STATE_DIR=/var/lib/eppmode
 STATE_FILE="$STATE_DIR/state"
 LOCK_FILE="$STATE_DIR/.lock"
+PLATFORM_WRITE_FILE="$STATE_DIR/.platform-write"
 
 require_root() {
 	if [ "$(id -u)" -ne 0 ]; then
@@ -213,6 +214,13 @@ platform_profile_summary() (
 	done
 )
 
+# One-line "provider=value, ..." summary for pending/diagnostic messages.
+describe_platform_state() {
+	files="$(platform_profile_files)"
+	[ -n "$files" ] || return 0
+	platform_profile_summary "$files"
+}
+
 write_direct_platform_profiles() {
 	target_platform="$1"
 	profile_files="$2"
@@ -251,19 +259,58 @@ write_aggregate_platform_profile() {
 	printf '%s\n' "$target_platform" > "$legacy_profile" 2>/dev/null
 }
 
+# Have we already tried writing this same target within the cooldown
+# window? DYTC either accepts a write within well under a second or not at
+# all (see docs/power-saver-platform-profile-diagnose.de.md); repeating the
+# same write more often than EPPMODE_PLATFORM_MIN_INTERVAL just hammers the
+# firmware without changing the outcome.
+platform_write_on_cooldown() {
+	target_platform="$1"
+	[ -r "$PLATFORM_WRITE_FILE" ] || return 1
+	stored_uptime=
+	stored_target=
+	read -r stored_uptime stored_target < "$PLATFORM_WRITE_FILE" 2>/dev/null || return 1
+	[ "$stored_target" = "$target_platform" ] || return 1
+	case "$stored_uptime" in
+		""|*[!0-9.]*) return 1 ;;
+	esac
+	now="$(awk '{print $1}' /proc/uptime 2>/dev/null || printf 0)"
+	# A stored uptime greater than the current one means the machine
+	# rebooted since; treat that as an expired cooldown, not an active one.
+	awk -v s="$stored_uptime" -v n="$now" -v m="${EPPMODE_PLATFORM_MIN_INTERVAL:-30}" \
+		'BEGIN { exit !(s <= n && (n - s) < m) }'
+}
+
+record_platform_write() {
+	mkdir -p "$STATE_DIR" 2>/dev/null || true
+	now="$(awk '{print $1}' /proc/uptime 2>/dev/null || printf 0)"
+	printf '%s %s\n' "$now" "$1" > "$PLATFORM_WRITE_FILE" 2>/dev/null || true
+}
+
+# Returns 0 (fully applied), 1 (hard failure: bad config, no writable
+# profile file), or 2 (the write was sent but not confirmed stable within
+# the timeout, or was skipped because of the cooldown above; the caller is
+# expected to record the target as pending and let the next reassert retry
+# it). $2 = "force" bypasses the cooldown check (used for direct user
+# actions and boot restore, never for the periodic reassert).
 apply_platform_profile() {
 	target_platform="$(mode_platform_profile "$1")"
+	force="${2:-}"
 	profile_files="$(platform_profile_files)"
 	[ -n "$profile_files" ] || return 0
 
 	platform_profiles_support "$target_platform" "$profile_files" || return 0
 	platform_profiles_match "$target_platform" "$profile_files" && return 0
 
+	if [ "$force" != "force" ] && platform_write_on_cooldown "$target_platform"; then
+		return 2
+	fi
+
 	poll_delay="${EPPMODE_PLATFORM_POLL_DELAY:-${EPPMODE_PLATFORM_DELAY:-0.25}}"
-	max_polls="${EPPMODE_PLATFORM_MAX_POLLS:-32}"
-	stable_reads_required="${EPPMODE_PLATFORM_STABLE_READS:-3}"
-	retry_every="${EPPMODE_PLATFORM_RETRY_EVERY:-8}"
-	max_writes="${EPPMODE_PLATFORM_MAX_WRITES:-3}"
+	max_polls="${EPPMODE_PLATFORM_MAX_POLLS:-6}"
+	stable_reads_required="${EPPMODE_PLATFORM_STABLE_READS:-2}"
+	retry_every="${EPPMODE_PLATFORM_RETRY_EVERY:-4}"
+	max_writes="${EPPMODE_PLATFORM_MAX_WRITES:-1}"
 	for retry_value in "$max_polls" "$stable_reads_required" "$retry_every" "$max_writes"; do
 		case "$retry_value" in
 			""|*[!0-9]*) report_error "Invalid platform_profile retry configuration"; return 1 ;;
@@ -276,6 +323,8 @@ apply_platform_profile() {
 		report_error "Invalid platform_profile retry configuration"
 		return 1
 	fi
+
+	record_platform_write "$target_platform"
 
 	# Use one route for the whole transaction. Repeatedly alternating between
 	# the aggregate and provider files queues competing ThinkPad DYTC completion
@@ -320,15 +369,13 @@ apply_platform_profile() {
 		poll=$((poll + 1))
 	done
 
-	actual_profiles="$(platform_profile_summary "$profile_files")"
-	report_error "platform_profile did not stabilize at $target_platform within the configured timeout ($actual_profiles)"
-	return 1
+	return 2
 }
 
 apply_hardware() {
 	sync_power_profiles_daemon "$1" || return 1
 	apply_epp "$1" || return 1
-	apply_platform_profile "$1"
+	apply_platform_profile "$1" "${2:-}"
 }
 
 read_epp_mode() {
@@ -413,13 +460,14 @@ read_state_value() {
 }
 
 write_state() {
-	# $1=SELECTED $2=APPLIED $3=LOCK $4=SAFETY
+	# $1=SELECTED $2=APPLIED $3=LOCK $4=SAFETY $5=PLATFORM_PENDING
 	tmp="$(mktemp "$STATE_DIR/.state.XXXXXX")"
 	cat > "$tmp" <<EOF
 SELECTED=$1
 APPLIED=$2
 LOCK=$3
 SAFETY=$4
+PLATFORM_PENDING=$5
 EOF
 	chmod 0644 "$tmp"
 	mv -f "$tmp" "$STATE_FILE"
@@ -439,26 +487,46 @@ with_lock() {
 	"$@"
 }
 
+# Applies $1 (forced, bypassing the platform_profile cooldown) and records
+# the outcome. $2=SELECTED to record, $1 doubles as the value recorded for
+# APPLIED since every caller applies exactly what it wants applied. $3=LOCK
+# $4=SAFETY. A hard failure (rc 1) is left for the caller to react to; a
+# platform_profile timeout (rc 2) is recorded as pending, not treated as a
+# failure, since EPP and power-profiles-daemon are already correct.
+apply_hardware_and_write() {
+	rc=0
+	apply_hardware "$1" force || rc=$?
+	[ "$rc" -eq 1 ] && return 1
+	if [ "$rc" -eq 2 ]; then
+		write_state "$2" "$1" "$3" "$4" "$(mode_platform_profile "$1")"
+		report_error "Platform profile for $1 is pending ($(describe_platform_state))"
+	else
+		write_state "$2" "$1" "$3" "$4" ""
+	fi
+	return 0
+}
+
 cmd_set() {
 	target="$1"
 	mode_is_valid "$target" || { echo "Unknown mode: $target" >&2; exit 1; }
 	lock="$(current_or_default LOCK 0)"
-	apply_hardware "$target"
-	write_state "$target" "$target" "$lock" 0
+	apply_hardware_and_write "$target" "$target" "$lock" 0
 }
 
 cmd_lock() {
 	selected="$(current_or_default SELECTED balanced-performance)"
 	applied="$(current_or_default APPLIED balanced-performance)"
 	safety="$(current_or_default SAFETY 0)"
-	write_state "$selected" "$applied" 1 "$safety"
+	pending="$(current_or_default PLATFORM_PENDING "")"
+	write_state "$selected" "$applied" 1 "$safety" "$pending"
 }
 
 cmd_unlock() {
 	selected="$(current_or_default SELECTED balanced-performance)"
 	applied="$(current_or_default APPLIED balanced-performance)"
 	safety="$(current_or_default SAFETY 0)"
-	write_state "$selected" "$applied" 0 "$safety"
+	pending="$(current_or_default PLATFORM_PENDING "")"
+	write_state "$selected" "$applied" 0 "$safety" "$pending"
 }
 
 cmd_reassert() {
@@ -466,14 +534,39 @@ cmd_reassert() {
 	applied="$(current_or_default APPLIED balanced-performance)"
 	selected="$(current_or_default SELECTED "$applied")"
 	safety="$(current_or_default SAFETY 0)"
+	pending="$(current_or_default PLATFORM_PENDING "")"
 
 	if [ "$lock" = "1" ] || [ "$safety" = "1" ]; then
-		hardware_matches_mode "$applied" && return 0
-		if apply_hardware "$applied"; then
+		if hardware_matches_mode "$applied"; then
+			if [ -n "$pending" ]; then
+				write_state "$selected" "$applied" "$lock" "$safety" ""
+				logger -t eppmode "eppmode: platform_profile pending resolved for $applied" || true
+			fi
 			return 0
 		fi
+
+		rc=0
+		apply_hardware "$applied" || rc=$?
+
+		if [ "$rc" -eq 0 ]; then
+			if [ -n "$pending" ]; then
+				write_state "$selected" "$applied" "$lock" "$safety" ""
+				logger -t eppmode "eppmode: platform_profile pending resolved for $applied" || true
+			fi
+			return 0
+		fi
+
+		if [ "$rc" -eq 2 ]; then
+			target_platform="$(mode_platform_profile "$applied")"
+			if [ "$pending" != "$target_platform" ]; then
+				write_state "$selected" "$applied" "$lock" "$safety" "$target_platform"
+				report_error "Platform profile for $applied is pending ($(describe_platform_state))"
+			fi
+			return 0
+		fi
+
 		if [ "$lock" = "1" ]; then
-			write_state "$selected" "$applied" 0 "$safety"
+			write_state "$selected" "$applied" 0 "$safety" "$pending"
 			report_error "Lock disabled because the applied power mode could not be enforced"
 		else
 			report_error "Battery safety power mode could not be enforced"
@@ -482,6 +575,30 @@ cmd_reassert() {
 	fi
 
 	epp_mode="$(read_epp_mode 2>/dev/null || true)"
+	expected_platform="$(mode_platform_profile "$applied")"
+
+	# A platform_profile write we ourselves started but that DYTC hasn't
+	# confirmed yet is not foreign drift: EPP already matches APPLIED, and
+	# the outstanding profile is exactly the one APPLIED wants. Keep
+	# retrying towards APPLIED instead of reinterpreting this as an
+	# external mode change.
+	if [ -n "$pending" ] && [ "$pending" = "$expected_platform" ] && [ "$epp_mode" = "$applied" ]; then
+		if hardware_matches_mode "$applied"; then
+			write_state "$selected" "$applied" 0 "$safety" ""
+			logger -t eppmode "eppmode: platform_profile pending resolved for $applied" || true
+			return 0
+		fi
+		rc=0
+		apply_hardware "$applied" || rc=$?
+		if [ "$rc" -eq 0 ]; then
+			write_state "$selected" "$applied" 0 "$safety" ""
+			logger -t eppmode "eppmode: platform_profile pending resolved for $applied" || true
+		elif [ "$rc" -eq 1 ]; then
+			report_error "Could not re-apply $applied while a platform profile change was pending"
+		fi
+		return 0
+	fi
+
 	if ! platform_profile="$(read_platform_profile)"; then
 		report_error "Could not read platform_profile while reconciling unlocked hardware state"
 		return 1
@@ -492,14 +609,19 @@ cmd_reassert() {
 		return 1
 	fi
 
-	expected_platform="$(mode_platform_profile "$applied")"
 	if [ "$epp_mode" = "$applied" ] &&
 		{ [ -z "$platform_profile" ] || [ "$platform_profile" = "$expected_platform" ]; }; then
 		return
 	fi
 
-	apply_hardware "$target"
-	write_state "$target" "$target" 0 0
+	rc=0
+	apply_hardware "$target" || rc=$?
+	[ "$rc" -eq 1 ] && return 1
+	if [ "$rc" -eq 2 ]; then
+		write_state "$target" "$target" 0 0 "$(mode_platform_profile "$target")"
+	else
+		write_state "$target" "$target" 0 0 ""
+	fi
 }
 
 # UPower state values: 1=charging, 2=discharging, 3=empty,
@@ -560,16 +682,13 @@ cmd_battery_check() {
 	if [ "$state" = "discharging" ] && [ "$is_below" = "1" ]; then
 		if [ "$selected" = "power-saver" ]; then
 			if [ "$applied" != "power-saver" ] || [ "$safety" != "0" ]; then
-				apply_hardware power-saver
-				write_state power-saver power-saver "$lock" 0
+				apply_hardware_and_write power-saver "$selected" "$lock" 0
 			fi
 		elif [ "$safety" != "1" ]; then
-			apply_hardware balanced-powersave
-			write_state "$selected" balanced-powersave "$lock" 1
+			apply_hardware_and_write balanced-powersave "$selected" "$lock" 1
 		fi
 	elif { [ "$state" = "external-power" ] || [ "$is_above" = "1" ]; } && [ "$safety" = "1" ]; then
-		apply_hardware "$selected"
-		write_state "$selected" "$selected" "$lock" 0
+		apply_hardware_and_write "$selected" "$selected" "$lock" 0
 	fi
 }
 
@@ -579,8 +698,16 @@ cmd_restore() {
 	selected="$(current_or_default SELECTED "$applied")"
 	lock="$(current_or_default LOCK 0)"
 	safety="$(current_or_default SAFETY 0)"
-	apply_hardware "$applied"
-	[ -f "$STATE_FILE" ] || write_state "$selected" "$applied" "$lock" "$safety"
+	rc=0
+	apply_hardware "$applied" force || rc=$?
+	[ "$rc" -eq 1 ] && return 1
+	if [ ! -f "$STATE_FILE" ]; then
+		if [ "$rc" -eq 2 ]; then
+			write_state "$selected" "$applied" "$lock" "$safety" "$(mode_platform_profile "$applied")"
+		else
+			write_state "$selected" "$applied" "$lock" "$safety" ""
+		fi
+	fi
 }
 
 cmd_status() {

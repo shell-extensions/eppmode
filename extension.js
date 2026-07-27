@@ -91,6 +91,15 @@ function detectHardwareMode(eppValues) {
     return EPP_TO_MODE.get(epp) ?? 'unknown';
 }
 
+// The platform_profile write for the currently applied mode hasn't been
+// confirmed by the hardware yet (tools/eppmode-helper: PLATFORM_PENDING).
+// EPP and power-profiles-daemon are already correct in that case — this is
+// informational, not an error, and the periodic reassert keeps retrying it
+// in the background.
+function isPlatformPending(state) {
+    return Boolean(state?.PLATFORM_PENDING);
+}
+
 function isUnexpectedUnlock(previousLockState, currentLockState, pendingLockState) {
     return previousLockState === true &&
         currentLockState === false &&
@@ -128,6 +137,20 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
 
         this._indicator = indicator;
         this.menu.setHeader('power-profile-balanced-symbolic', 'EPP Power Modes');
+
+        this._platformPendingItem = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
+        const pendingBox = new St.BoxLayout({ vertical: false, style_class: 'popup-menu-item-content' });
+        const pendingIcon = new St.Icon({ icon_name: 'emblem-synchronizing-symbolic', style_class: 'popup-menu-icon' });
+        pendingBox.add_child(pendingIcon);
+        const pendingLabel = new St.Label({
+            text: _('Platform profile pending'),
+            x_expand: true,
+            x_align: Clutter.ActorAlign.START,
+        });
+        pendingBox.add_child(pendingLabel);
+        this._platformPendingItem.actor.add_child(pendingBox);
+        this._platformPendingItem.visible = false;
+        this.menu.addMenuItem(this._platformPendingItem);
 
         this._modeItems = new Map();
         const modesSection = new PopupMenu.PopupMenuSection();
@@ -389,12 +412,17 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
             this._knownLockState = locked;
             this._setLockIndicator(locked);
         }
+        this._setPlatformPending(isPlatformPending(state));
         // EPP values are written CPU by CPU, followed by platform_profile.
         // Avoid exposing that brief intermediate combination as "Mixed";
         // _applyMode() reconciles from hardware after the helper exits.
         if (this._busy)
             return;
         this._setAppliedMode(this._readHardwareMode(), { viaClick });
+    }
+
+    _setPlatformPending(pending) {
+        this._platformPendingItem.visible = pending;
     }
 
     _setLockIndicator(locked) {

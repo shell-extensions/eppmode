@@ -46,11 +46,17 @@ Auf neueren Kerneln sind die providerspezifischen Schnittstellen unter
 bevorzugt der Helfer den alten Sammelpfad
 `/sys/firmware/acpi/platform_profile` als vom Kernel koordinierten Weg und
 greift nur dann direkt auf die Providerdateien zurück, wenn dieser Sammelpfad
-nicht verfügbar ist oder den Schreibzugriff ablehnt. Da ThinkPad-DYTC-Firmware
-ein Profil verzögert bestätigen kann, wartet der Helfer bis zu acht Sekunden
-und verlangt drei aufeinanderfolgende passende Providerwerte. Statt schnell
-zwischen beiden Schnittstellen zu wechseln, sendet er höchstens zwei weitere
-Schreibimpulse mit Abstand.
+nicht verfügbar ist oder den Schreibzugriff ablehnt. Auf mancher
+ThinkPad-DYTC-Firmware kann ein `platform_profile`-Schreibvorgang still
+verworfen werden — unabhängig von Netz-/Akkustatus oder der Nähe zu den
+vorausgehenden EPP-/PPD-Schreibvorgängen (siehe
+[`docs/power-saver-platform-profile-diagnose.de.md`](docs/power-saver-platform-profile-diagnose.de.md)
+für die Messung dahinter). Statt deswegen den gesamten Moduswechsel scheitern
+zu lassen, behandelt der Helfer ein unbestätigtes Plattformprofil als
+ausstehend: EPP und `power-profiles-daemon` bleiben wirksam, die Kachel zeigt
+weiterhin den gewählten Modus, im Menü erscheint „Plattformprofil ausstehend",
+und der Hintergrund-Reassert versucht es weiter (mit Cooldown, um die
+Firmware nicht zu bombardieren), bis die Hardware bestätigt.
 
 Der Installer lässt `power-profiles-daemon` aktiv, startet ihn aber mit
 blockiertem `platform_profile`-Treiber neu. Dazu verwendet er den bereits in

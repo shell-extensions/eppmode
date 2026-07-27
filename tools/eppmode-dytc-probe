@@ -1,0 +1,534 @@
+#!/bin/sh
+# Diagnostic probe for the ThinkPad DYTC platform_profile bug described in
+# docs/power-saver-platform-profile-diagnose.de.md. NOT installed by
+# install.sh and not part of the shipped extension. Run manually:
+#
+#   sudo tools/eppmode-dytc-probe --yes
+#   tools/eppmode-dytc-probe --report dytc-probe-2026-07-27T...csv
+#
+# DYTC accepts or silently rejects a platform_profile write on a
+# per-attempt basis; the triggering condition is unknown. This tool writes
+# a target profile repeatedly, in isolation from EPP/PPD, and records the
+# outcome together with system conditions so the correlation can be found
+# from the resulting CSV.
+set -eu
+
+PROG=$(basename "$0")
+STATE_DIR=/var/lib/eppmode
+LOCK_FILE="$STATE_DIR/.lock"
+HELPER=/usr/local/bin/eppmode-helper
+AGGREGATE=/sys/firmware/acpi/platform_profile
+UNITS="eppmode-reassert.timer eppmode-reassert.path eppmode-battery.timer"
+
+from_profile=balanced
+to_profile=low-power
+route=aggregate
+precede_mode=cycle
+attempts=20
+interval=30
+timeout=5
+poll_delay=0.1
+stable_reads_required=3
+out_file=""
+dry_run=0
+no_unit_control=0
+report_file=""
+yes=0
+
+active_units=""
+units_stopped=0
+provider_file=""
+provider_choices=""
+last_write_uptime=""
+
+usage() {
+	cat <<'EOF'
+Usage: eppmode-dytc-probe [options]
+
+  --from PROFILE            starting/baseline profile (default: balanced)
+  --to PROFILE               profile to probe for DYTC acceptance (default: low-power)
+  --route aggregate|provider  which sysfs path to write (default: aggregate)
+  --precede none|epp|ppd|both|cycle
+                               what to set (to the mode matching --to) right
+                               before the platform_profile write, to test
+                               whether EPP/PPD proximity affects DYTC
+                               acceptance. "cycle" rotates through all four
+                               by attempt number (default: cycle)
+  --attempts N                number of probe attempts (default: 20)
+  --interval SECONDS          minimum seconds between attempt starts (default: 30, min 5)
+  --timeout SECONDS           max seconds to wait for convergence (default: 5)
+  --stable-reads N             consecutive matching reads required before a
+                               write counts as accepted, mirrors the real
+                               helper's STABLE_READS (default: 3)
+  --out FILE                  CSV output path (default: ./dytc-probe-<timestamp>.csv)
+  --no-unit-control           do not stop/restart eppmode-reassert/-battery units
+  --dry-run                   print the plan, touch no hardware, write no CSV
+  --report FILE                summarize an existing CSV and exit (no root, no writes)
+  --yes                       required confirmation to run live attempts
+  -h, --help                   show this help
+EOF
+}
+
+fail() {
+	echo "$PROG: $1" >&2
+	exit 1
+}
+
+require_root() {
+	[ "$(id -u)" -eq 0 ] || fail "must be run as root (sudo tools/eppmode-dytc-probe ...)"
+}
+
+has_word() {
+	case " $1 " in
+		*" $2 "*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+uptime_s() {
+	awk '{print $1}' /proc/uptime 2>/dev/null || printf '0'
+}
+
+now_iso() {
+	date -Iseconds 2>/dev/null || date
+}
+
+csv_escape() {
+	# Replace comma/newline so the field survives naive CSV splitting.
+	printf '%s' "$1" | tr ',\n' ';;'
+}
+
+# --- context readers -------------------------------------------------------
+
+read_ac_online() {
+	for f in /sys/class/power_supply/AC*/online /sys/class/power_supply/ADP*/online; do
+		[ -r "$f" ] || continue
+		cat "$f" 2>/dev/null
+		return 0
+	done
+	printf ''
+}
+
+read_bat_percent() { cat /sys/class/power_supply/BAT0/capacity 2>/dev/null || true; }
+read_bat_status()  { cat /sys/class/power_supply/BAT0/status 2>/dev/null || true; }
+read_lapmode()     { cat /sys/devices/platform/thinkpad_acpi/dytc_lapmode 2>/dev/null || true; }
+read_tablet_mode() { cat /sys/devices/platform/thinkpad_acpi/hotkey_tablet_mode 2>/dev/null || true; }
+read_thermal()     { tr '\n' ' ' < /proc/acpi/ibm/thermal 2>/dev/null || true; }
+read_loadavg1()    { awk '{print $1}' /proc/loadavg 2>/dev/null || true; }
+read_ppd_profile() { powerprofilesctl get 2>/dev/null || true; }
+read_epp()         { cat /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference 2>/dev/null || true; }
+
+read_provider() { cat "$provider_file" 2>/dev/null || true; }
+read_aggregate() { cat "$AGGREGATE" 2>/dev/null || true; }
+
+# --- platform_profile discovery --------------------------------------------
+
+discover_provider() {
+	for f in /sys/class/platform-profile/platform-profile-*/profile; do
+		[ -e "$f" ] || continue
+		provider_file="$f"
+		provider_choices="${f%/profile}/choices"
+		return 0
+	done
+	fail "no /sys/class/platform-profile/*/profile found; this probe targets exactly that interface"
+}
+
+validate_choice() {
+	# $1 = label, $2 = value
+	choices="$(cat "$provider_choices" 2>/dev/null || true)"
+	has_word "$choices" "$2" || fail "$1 '$2' is not among the provider's choices ($choices)"
+}
+
+# --- write path --------------------------------------------------------
+
+write_target() {
+	# $1 = target value, $2 = route
+	file="$AGGREGATE"
+	[ "$2" = provider ] && file="$provider_file"
+	printf '%s\n' "$1" > "$file" 2>/dev/null || true
+}
+
+# Poll the provider file (authoritative) until it matches $1 for
+# $stable_reads_required consecutive reads, or $timeout elapses. A single
+# matching read is NOT enough: the real eppmode-helper requires the same
+# stability (STABLE_READS=3) because a bare first-match check cannot tell
+# "DYTC accepted it" apart from "DYTC accepted it and then reverted a
+# moment later" (see the "Provider class files remain authoritative for
+# verification" comment in apply_platform_profile()). Prints elapsed
+# milliseconds and returns 0 once stable, 1 on timeout.
+poll_converge() {
+	target=$1
+	elapsed=0
+	stable=0
+	while :; do
+		if [ "$(read_provider)" = "$target" ]; then
+			stable=$((stable + 1))
+			if [ "$stable" -ge "$stable_reads_required" ]; then
+				awk -v e="$elapsed" 'BEGIN { printf "%d", e * 1000 }'
+				return 0
+			fi
+		else
+			stable=0
+		fi
+		sleep "$poll_delay"
+		elapsed=$(awk -v e="$elapsed" -v d="$poll_delay" -v t="$timeout" \
+			'BEGIN { e += d; print (e <= t) ? e : t + 1 }')
+		awk -v e="$elapsed" -v t="$timeout" 'BEGIN { exit !(e > t) }' && break
+	done
+	printf ''
+	return 1
+}
+
+# --- EPP/PPD preconditions ----------------------------------------------
+#
+# The isolated platform_profile write converged 20/20 in the first probe
+# run, while the real eppmode-helper (EPP write, then PPD sync, then
+# platform_profile) failed repeatedly under seemingly identical AC/battery
+# conditions. These reproduce that sequence so --precede can test whether
+# a preceding EPP and/or PPD write is what makes DYTC reject the profile.
+
+mode_for_platform() {
+	case "$1" in
+		low-power) printf '%s\n' power-saver ;;
+		performance) printf '%s\n' performance ;;
+		*) printf '%s\n' balanced-performance ;;
+	esac
+}
+
+epp_for_mode() {
+	case "$1" in
+		power-saver) printf '%s\n' power ;;
+		balanced-powersave) printf '%s\n' balance_power ;;
+		performance) printf '%s\n' performance ;;
+		*) printf '%s\n' balance_performance ;;
+	esac
+}
+
+ppd_for_mode() {
+	case "$1" in
+		power-saver) printf '%s\n' power-saver ;;
+		performance) printf '%s\n' performance ;;
+		*) printf '%s\n' balanced ;;
+	esac
+}
+
+set_epp() {
+	# $1 = mode (power-saver|balanced-powersave|balanced-performance|performance)
+	target_epp=$(epp_for_mode "$1")
+	for f in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/energy_performance_preference; do
+		[ -w "$f" ] || continue
+		printf '%s\n' "$target_epp" > "$f" 2>/dev/null || true
+	done
+}
+
+set_ppd() {
+	# $1 = mode
+	powerprofilesctl set "$(ppd_for_mode "$1")" >/dev/null 2>&1 || true
+}
+
+# Which --precede variant applies to attempt $1. "cycle" rotates through
+# all four so one run compares them under matched external conditions.
+precede_for_attempt() {
+	case "$precede_mode" in
+		cycle)
+			case $(( ($1 - 1) % 4 )) in
+				0) printf 'none' ;;
+				1) printf 'epp' ;;
+				2) printf 'ppd' ;;
+				3) printf 'both' ;;
+			esac
+			;;
+		*) printf '%s' "$precede_mode" ;;
+	esac
+}
+
+apply_precede() {
+	# $1 = variant, $2 = mode to precede towards
+	case "$1" in
+		epp) set_epp "$2" ;;
+		ppd) set_ppd "$2" ;;
+		both) set_epp "$2"; set_ppd "$2" ;;
+	esac
+}
+
+# --- systemd unit coexistence -----------------------------------------
+
+capture_and_stop_units() {
+	[ "$no_unit_control" -eq 1 ] && return 0
+	for u in $UNITS; do
+		if systemctl is-active --quiet "$u" 2>/dev/null; then
+			active_units="$active_units $u"
+		fi
+	done
+	if [ -n "$active_units" ]; then
+		# shellcheck disable=SC2086
+		systemctl stop $active_units
+		units_stopped=1
+		echo "$PROG: stopped$active_units for the duration of the probe" >&2
+	fi
+}
+
+restore_units() {
+	[ "$units_stopped" -eq 1 ] || return 0
+	# shellcheck disable=SC2086
+	systemctl start $active_units 2>/dev/null || true
+	units_stopped=0
+	echo "$PROG: restarted$active_units" >&2
+}
+
+restore_baseline_profile() {
+	[ "$dry_run" -eq 1 ] && return 0
+	write_target "$from_profile" "$route"
+}
+
+cleanup() {
+	rc=$?
+	restore_baseline_profile
+	restore_units
+	if [ -x "$HELPER" ]; then
+		"$HELPER" restore >/dev/null 2>&1 || true
+	fi
+	exit "$rc"
+}
+
+# --- per-attempt lock ---------------------------------------------------
+
+# Runs "$@" directly in the current shell, NOT a subshell: run_attempt
+# tracks last_write_uptime across calls in a plain variable, which a
+# subshell would silently reset on every attempt.
+with_probe_lock() {
+	mkdir -p "$STATE_DIR" 2>/dev/null || true
+	exec 9>>"$LOCK_FILE"
+	if ! flock -x -w 10 9; then
+		echo "$PROG: could not acquire eppmode lock" >&2
+		exec 9>&-
+		return 1
+	fi
+	"$@"
+	rc=$?
+	flock -u 9
+	exec 9>&-
+	return "$rc"
+}
+
+# --- one measured attempt -----------------------------------------------
+
+run_attempt() {
+	n=$1
+
+	variant=$(precede_for_attempt "$n")
+
+	if [ "$dry_run" -eq 1 ]; then
+		echo "[dry-run] attempt $n/$attempts: precede=$variant, $from_profile -> $to_profile via $route, then back to $from_profile" >&2
+		return 0
+	fi
+
+	# Reach the baseline before touching anything we measure, on all three
+	# levels: a leftover EPP/PPD from a previous attempt's "both" variant
+	# must not leak into this attempt's "before" snapshot.
+	baseline_mode=$(mode_for_platform "$from_profile")
+	set_epp "$baseline_mode"
+	set_ppd "$baseline_mode"
+	sleep 0.3
+	write_target "$from_profile" "$route"
+	poll_converge "$from_profile" >/dev/null || true
+
+	ts_iso=$(now_iso)
+	up=$(uptime_s)
+	ac=$(read_ac_online)
+	bat_pct=$(read_bat_percent)
+	bat_status=$(read_bat_status)
+	lapmode=$(read_lapmode)
+	tablet=$(read_tablet_mode)
+	thermal=$(read_thermal)
+	loadavg=$(read_loadavg1)
+	ppd=$(read_ppd_profile)
+	epp=$(read_epp)
+	provider_before=$(read_provider)
+	aggregate_before=$(read_aggregate)
+	if [ -n "$last_write_uptime" ]; then
+		since=$(awk -v u="$up" -v l="$last_write_uptime" 'BEGIN { printf "%.1f", u - l }')
+	else
+		since=""
+	fi
+
+	target_mode=$(mode_for_platform "$to_profile")
+	apply_precede "$variant" "$target_mode"
+
+	write_target "$to_profile" "$route"
+	last_write_uptime=$up
+	converge_ms=$(poll_converge "$to_profile") && result=accepted || result=rejected
+
+	row="$(csv_escape "$ts_iso"),$up,$n,$route,$from_profile,$to_profile,$result,$converge_ms,$ac,$bat_pct,$(csv_escape "$bat_status"),$lapmode,$tablet,$(csv_escape "$thermal"),$loadavg,$since,$(csv_escape "$ppd"),$(csv_escape "$epp"),$(csv_escape "$provider_before"),$(csv_escape "$aggregate_before"),$variant"
+	printf '%s\n' "$row" >> "$out_file"
+	echo "$PROG: attempt $n/$attempts: precede=$variant $result${converge_ms:+ (${converge_ms}ms)}" >&2
+
+	write_target "$from_profile" "$route"
+	poll_converge "$from_profile" >/dev/null || true
+	set_epp "$baseline_mode"
+	set_ppd "$baseline_mode"
+}
+
+csv_header() {
+	printf '%s\n' "ts_iso,uptime_s,attempt,route,from_profile,to_profile,result,converge_ms,ac_online,bat_percent,bat_status,dytc_lapmode,hotkey_tablet_mode,thermal,loadavg1,secs_since_last_dytc_write,ppd_profile,epp_value,provider_before,aggregate_before,precede"
+}
+
+# --- report mode ---------------------------------------------------------
+#
+# Summarizes an existing probe CSV: overall acceptance rate, then a
+# breakdown per candidate column (exact-value grouping for the discrete
+# columns, bucketed for the two continuous ones) so a correlation between
+# DYTC acceptance and system conditions can be spotted by eye. Read-only:
+# never touches sysfs or the eppmode units, only reads the file at $1.
+report_csv() {
+	csv=$1
+	[ -r "$csv" ] || fail "cannot read report file: $csv"
+
+	awk -F, '
+		NR == 1 { next }
+		$7 != "accepted" && $7 != "rejected" { next }
+		{
+			ok = ($7 == "accepted") ? 1 : 0
+
+			bump("ac_online", $9, ok)
+			bump("bat_status", $11, ok)
+			bump("dytc_lapmode", $12, ok)
+			bump("hotkey_tablet_mode", $13, ok)
+			bump("route", $4, ok)
+			bump("precede", $21, ok)
+
+			since = $16
+			if (since == "")
+				sbucket = "first attempt"
+			else if (since + 0 < 10)
+				sbucket = "<10s"
+			else if (since + 0 < 30)
+				sbucket = "10-30s"
+			else
+				sbucket = ">=30s"
+			bump("secs_since_last_dytc_write (bucketed)", sbucket, ok)
+
+			load = $15
+			if (load == "")
+				lbucket = "unknown"
+			else if (load + 0 < 0.5)
+				lbucket = "<0.5"
+			else
+				lbucket = ">=0.5"
+			bump("loadavg1 (bucketed)", lbucket, ok)
+
+			total_rows++
+			accepted_rows += ok
+		}
+		function bump(col, val, ok,    key) {
+			key = col SUBSEP val
+			total[key]++
+			if (ok)
+				accepted[key]++
+			seen_col[col] = 1
+		}
+		END {
+			if (total_rows == 0) {
+				print "no accepted/rejected rows found"
+				exit 1
+			}
+			printf "%d rows total: %d accepted (%.0f%%)\n\n", \
+				total_rows, accepted_rows, 100 * accepted_rows / total_rows
+			for (col in seen_col) {
+				printf "%s\n", col
+				for (key in total) {
+					n = split(key, parts, SUBSEP)
+					if (n != 2 || parts[1] != col)
+						continue
+					t = total[key]
+					a = accepted[key] + 0
+					printf "  %-20s %3d/%-3d  %5.1f%%\n", parts[2], a, t, 100 * a / t
+				}
+				print ""
+			}
+		}
+	' "$csv"
+}
+
+# --- argument parsing ------------------------------------------------------
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--from) from_profile=$2; shift 2 ;;
+		--to) to_profile=$2; shift 2 ;;
+		--route)
+			case "$2" in
+				aggregate|provider) route=$2 ;;
+				*) fail "--route must be 'aggregate' or 'provider'" ;;
+			esac
+			shift 2
+			;;
+		--precede)
+			case "$2" in
+				none|epp|ppd|both|cycle) precede_mode=$2 ;;
+				*) fail "--precede must be one of: none, epp, ppd, both, cycle" ;;
+			esac
+			shift 2
+			;;
+		--attempts) attempts=$2; shift 2 ;;
+		--interval) interval=$2; shift 2 ;;
+		--timeout) timeout=$2; shift 2 ;;
+		--stable-reads) stable_reads_required=$2; shift 2 ;;
+		--out) out_file=$2; shift 2 ;;
+		--no-unit-control) no_unit_control=1; shift ;;
+		--dry-run) dry_run=1; shift ;;
+		--report) report_file=$2; shift 2 ;;
+		--yes) yes=1; shift ;;
+		-h|--help) usage; exit 0 ;;
+		*) fail "unknown option: $1 (see --help)" ;;
+	esac
+done
+
+case "$interval" in
+	""|*[!0-9]*) fail "--interval must be a non-negative integer" ;;
+esac
+[ "$interval" -ge 5 ] || interval=5
+
+if [ -n "$report_file" ]; then
+	report_csv "$report_file"
+	exit $?
+fi
+
+require_root
+discover_provider
+validate_choice --from "$from_profile"
+validate_choice --to "$to_profile"
+
+if [ "$dry_run" -ne 1 ] && [ "$yes" -ne 1 ]; then
+	fail "refusing to run live attempts without --yes (use --dry-run to preview, or --report to analyze an existing CSV)"
+fi
+
+[ -n "$out_file" ] || out_file="./dytc-probe-$(date +%Y%m%dT%H%M%S 2>/dev/null || date +%s).csv"
+
+if [ "$dry_run" -ne 1 ]; then
+	[ -s "$out_file" ] || csv_header > "$out_file"
+	trap cleanup EXIT INT TERM
+	capture_and_stop_units
+fi
+
+echo "$PROG: provider=$provider_file route=$route from=$from_profile to=$to_profile attempts=$attempts interval=${interval}s" >&2
+
+n=1
+while [ "$n" -le "$attempts" ]; do
+	attempt_start=$(uptime_s)
+	if [ "$dry_run" -eq 1 ]; then
+		run_attempt "$n"
+	else
+		with_probe_lock run_attempt "$n"
+	fi
+
+	if [ "$n" -lt "$attempts" ]; then
+		attempt_end=$(uptime_s)
+		remaining=$(awk -v s="$attempt_start" -v e="$attempt_end" -v i="$interval" \
+			'BEGIN { r = i - (e - s); print (r > 0) ? r : 0 }')
+		[ "$dry_run" -eq 1 ] || sleep "$remaining"
+	fi
+	n=$((n + 1))
+done
+
+[ "$dry_run" -eq 1 ] || echo "$PROG: done, wrote $out_file" >&2

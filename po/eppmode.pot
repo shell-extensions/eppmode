@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: eppmode 1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-07-27 04:55+0200\n"
+"POT-Creation-Date: 2026-07-27 13:09+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -67,64 +67,68 @@ msgctxt "hardware status"
 msgid "Unknown"
 msgstr ""
 
-#: extension.js:125
+#: extension.js:134
 msgid "Power"
 msgstr ""
 
-#: extension.js:158
+#: extension.js:146
+msgid "Platform profile pending"
+msgstr ""
+
+#: extension.js:181
 msgid "Lock"
 msgstr ""
 
-#: extension.js:163
+#: extension.js:186
 msgid "Power Settings"
 msgstr ""
 
-#: extension.js:238
+#: extension.js:261
 msgid "Setup required"
 msgstr ""
 
-#: extension.js:238
+#: extension.js:261
 msgid "Run the install script once to allow passwordless access to the helper."
 msgstr ""
 
-#: extension.js:244 extension.js:472 extension.js:497
+#: extension.js:267 extension.js:500 extension.js:525
 msgid "Error"
 msgstr ""
 
-#: extension.js:244
+#: extension.js:267
 msgid "sudo was not found on this system."
 msgstr ""
 
-#: extension.js:386
+#: extension.js:409
 msgid "Lock disabled"
 msgstr ""
 
-#: extension.js:387
+#: extension.js:410
 msgid "The lock was disabled because the power mode could not be enforced."
 msgstr ""
 
-#: extension.js:472
+#: extension.js:500
 msgid "Could not apply the power mode."
 msgstr ""
 
-#: extension.js:497
+#: extension.js:525
 msgid "Could not change the lock state."
 msgstr ""
 
-#: extension.js:529
+#: extension.js:557
 msgid ""
 "This extension needs root access to control the CPU energy-performance-"
 "preference."
 msgstr ""
 
-#: extension.js:530
+#: extension.js:558
 msgid "Run the install script once:"
 msgstr ""
 
-#: extension.js:532
+#: extension.js:560
 msgid "Then restart GNOME Shell or disable/enable the extension."
 msgstr ""
 
-#: extension.js:535
+#: extension.js:563
 msgid "Close"
 msgstr ""

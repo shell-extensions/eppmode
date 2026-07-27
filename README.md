@@ -42,10 +42,17 @@ On newer kernels, provider-specific interfaces below
 `/sys/class/platform-profile/` are authoritative for reading and verification.
 The helper prefers the legacy `/sys/firmware/acpi/platform_profile` aggregate
 as the kernel-coordinated write path and falls back to direct provider writes
-only when that aggregate is unavailable or rejects the request. ThinkPad DYTC
-firmware may confirm a profile asynchronously, so the helper waits up to eight
-seconds and requires three consecutive matching provider reads. It sends at
-most two spaced retries instead of rapidly alternating between both interfaces.
+only when that aggregate is unavailable or rejects the request. On some
+ThinkPad DYTC firmware, a `platform_profile` write can be silently rejected
+regardless of AC/battery state or proximity to the preceding EPP/PPD writes
+(see
+[`docs/power-saver-platform-profile-diagnose.de.md`](docs/power-saver-platform-profile-diagnose.de.md)
+for the measurement behind this). Rather than fail the whole mode change over
+that, the helper treats an unconfirmed platform profile as pending: EPP and
+`power-profiles-daemon` stay in effect, the tile still shows the selected
+mode, a **Platform profile pending** row appears in the menu, and the
+background reassert keeps retrying (rate-limited to avoid hammering the
+firmware) until the hardware confirms.
 
 The installer keeps `power-profiles-daemon` active but restarts it with its
 `platform_profile` driver blocked, using the guard proven by

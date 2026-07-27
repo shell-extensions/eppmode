@@ -17,7 +17,8 @@ const context = {};
 vm.runInNewContext(
     `${source.slice(start, end)}
 globalThis.detectHardwareMode = detectHardwareMode;
-globalThis.isUnexpectedUnlock = isUnexpectedUnlock;`,
+globalThis.isUnexpectedUnlock = isUnexpectedUnlock;
+globalThis.isPlatformPending = isPlatformPending;`,
     context);
 
 const detect = context.detectHardwareMode;
@@ -45,4 +46,16 @@ const unlockCases = [
 for (const [args, expected] of unlockCases)
     assert.equal(context.isUnexpectedUnlock(...args), expected);
 
-console.log(`${cases.length + unlockCases.length} hardware status and lock tests passed`);
+const platformPendingCases = [
+    [null, false],
+    [undefined, false],
+    [{}, false],
+    [{ PLATFORM_PENDING: '' }, false],
+    [{ PLATFORM_PENDING: 'low-power' }, true],
+    [{ PLATFORM_PENDING: 'balanced' }, true],
+];
+
+for (const [state, expected] of platformPendingCases)
+    assert.equal(context.isPlatformPending(state), expected);
+
+console.log(`${cases.length + unlockCases.length + platformPendingCases.length} hardware status and lock tests passed`);

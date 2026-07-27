@@ -46,11 +46,17 @@ En kernels recientes, las interfaces específicas de cada proveedor bajo
 verificación. Para escribir, el ayudante prefiere la interfaz agregada antigua
 `/sys/firmware/acpi/platform_profile` como vía coordinada por el kernel y solo
 recurre a la escritura directa del proveedor cuando esa interfaz no está
-disponible o rechaza la solicitud. Como el firmware DYTC de ThinkPad puede
-confirmar un perfil de forma asíncrona, el ayudante espera hasta ocho segundos
-y exige tres lecturas consecutivas coincidentes del proveedor. En lugar de
-alternar rápidamente entre ambas interfaces, envía como máximo dos reintentos
-espaciados.
+disponible o rechaza la solicitud. En cierto firmware DYTC de ThinkPad, una
+escritura de `platform_profile` puede rechazarse silenciosamente,
+independientemente del estado de red/batería o de la proximidad a las
+escrituras previas de EPP/PPD (véase
+[`docs/power-saver-platform-profile-diagnose.de.md`](docs/power-saver-platform-profile-diagnose.de.md)
+para la medición detrás de esto). En vez de hacer fallar todo el cambio de
+modo por eso, el ayudante trata un perfil de plataforma no confirmado como
+pendiente: EPP y `power-profiles-daemon` siguen vigentes, el icono sigue
+mostrando el modo seleccionado, en el menú aparece «Perfil de plataforma
+pendiente», y el reassert en segundo plano sigue reintentando (limitado para
+no saturar el firmware) hasta que el hardware lo confirme.
 
 El instalador mantiene activo `power-profiles-daemon`, pero lo reinicia con su
 controlador `platform_profile` bloqueado mediante la protección ya probada en

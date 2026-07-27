@@ -1,6 +1,7 @@
 # Diagnose: Power-Saver-Wechsel scheitert am ThinkPad-Plattformprofil
 
-**Status:** offen, nicht behoben
+**Status:** Ursache weiterhin ungeklärt, Auswirkung softwareseitig abgefangen
+(Teilerfolg-Semantik, siehe „Umsetzung“ unten)
 **Stand:** 27. Juli 2026
 
 ## Betroffenes System
@@ -80,43 +81,81 @@ ThinkPad-ACPI-/DYTC-Provider:
   zurücksetzende Akteur.
 - CPU-EPP wird vor dem Plattformprofil erfolgreich geschrieben.
 - Loadshed greift weder auf PPD, CPU-EPP noch `platform_profile` zu.
-- Das Akku-Sicherheitsnetz war inaktiv (`SAFETY=0`); das Gerät hing am Netz und
-  der Akku lag bei 98 Prozent.
 - Der direkte Root-Helper-Aufruf scheitert genauso wie der Aufruf aus der
   GNOME-Erweiterung. Die UI ist daher nicht die Ursache.
 - Der Provider bietet `low-power balanced performance` ausdrücklich als
   gültige Auswahl an, bestätigt `low-power` in diesen Versuchen aber nicht.
 
 Ob die tiefere Ursache im Kernel-Treiber, in der verzögerten
-DYTC-Ereignisverarbeitung oder in der Lenovo-Firmware liegt, ist noch nicht
-abschließend bewiesen.
+DYTC-Ereignisverarbeitung oder in der Lenovo-Firmware liegt, ist nicht
+abschließend bewiesen — siehe „Messung“ unten für die Hypothesen, die dabei
+ausgeschlossen werden konnten.
+
+**Widerlegt:** Ein früherer Verdacht war, dass Netzbetrieb (statt Akku) den
+Wechsel blockiert. Das ist falsch — `low-power` wurde noch am selben Tag
+erfolgreich am Netzteil (98 % Akku) angewendet, unter denselben Bedingungen,
+unter denen zuvor wiederholt Fehlschläge auftraten. AC-Status korreliert mit
+nichts.
 
 ## Fehlgeschlagener Workaround
 
-Der aktuelle Workaround vermeidet schnelle Wechsel zwischen Sammel- und
-Providerpfad. Er schreibt bevorzugt über den Sammelpfad, prüft den Provider
-alle 250 Millisekunden, verlangt drei aufeinanderfolgende Treffer und sendet
-nach zwei und vier Sekunden je einen weiteren Schreibimpuls. Nach insgesamt
-acht Sekunden schlägt er fehl.
+Ein früherer Workaround vermied schnelle Wechsel zwischen Sammel- und
+Providerpfad: bevorzugt über den Sammelpfad schreiben, den Provider alle 250
+Millisekunden prüfen, drei aufeinanderfolgende Treffer verlangen, nach zwei
+und vier Sekunden je einen weiteren Schreibimpuls senden, nach insgesamt acht
+Sekunden aufgeben. Der reale ThinkPad-Provider konvergierte damit nicht — der
+Workaround war auf diesem Gerät nicht ausreichend. Ein „gestufter direkter
+Provider-Fallback“ (Sammelpfad, dann bei Abweichung gezielt direkt in
+`platform-profile-0/profile` schreiben) wurde als nächster Schritt erwogen,
+aber durch die Messung unten als von vornherein wirkungslos entlarvt: Es gibt
+auf diesem Gerät nur einen Provider — Sammel- und Klassenpfad landen im
+selben Kerneltreiber, ein alternativer Schreibweg existiert nicht.
 
-Die zugehörigen simulierten Tests bestehen, der reale ThinkPad-Provider
-konvergiert mit diesem ausschließlich koordinierten Schreibweg jedoch nicht.
-Der Workaround ist deshalb auf diesem Gerät nicht ausreichend.
+## Messung
 
-## Nächster technischer Ansatz
+Ein eigenes Diagnosewerkzeug (`tools/eppmode-dytc-probe`, nicht von
+`install.sh` installiert) hat `platform_profile`-Schreibvorgänge kontrolliert
+wiederholt und dabei Systemzustand (AC, Akku, `dytc_lapmode`, Thermik, Last,
+Abstand zum letzten Schreibvorgang) protokolliert. Drei Messrunden zu je 20
+Versuchen (60 insgesamt, 27. Juli 2026):
 
-Der nächste Versuch soll gestuft arbeiten:
+1. **Isolierter Schreibvorgang** (nur `platform_profile`, kein EPP/PPD
+   berührt): 20/20 angenommen, `converge_ms=0` — sofortige Konvergenz.
+2. **Mit vorausgehendem EPP-/PPD-Schreibvorgang** (reproduziert die reale
+   `apply_hardware()`-Abfolge, reihum `none`/`epp`/`ppd`/`both`): 20/20
+   angenommen, unabhängig von der Variante.
+3. **Mit korrekter Stabilitätsprüfung** (3 aufeinanderfolgende Treffer
+   statt nur der erste Lesevorgang — die erste Runde hatte einen Messfehler,
+   der ein kurzes Zurückspringen nicht erkannt hätte): weiterhin 20/20
+   angenommen, `converge_ms=200` durchgängig.
 
-1. Einmal über den Sammelpfad schreiben und dessen Abschluss abwarten.
-2. Bleibt der Provider abweichend, gezielt direkt in
-   `platform-profile-0/profile` schreiben.
-3. Direkte Wiederholungen mit ausreichendem Abstand statt schneller
-   alternierender Zugriffe ausführen.
-4. Erfolg erst nach mehreren stabilen Providerwerten melden.
-5. Bei endgültigem Fehler State und Sperre unverändert lassen und den letzten
-   Providerwert sowie den verwendeten Schreibweg protokollieren.
+**Ergebnis:** Weder isoliertes Schreiben, noch EPP-/PPD-Nähe, noch kurzes
+Flackern erklären die realen Fehlschläge — in 60 kontrollierten Versuchen trat
+keiner auf. Die real beobachteten Fehlschläge traten ausschließlich bei
+mehrfachen **manuellen** Aufrufen im Sekunden- bis Minutenabstand auf,
+teils überlappend mit dem alle 10 Sekunden laufenden `reassert`. Der Probe
+serialisiert genau das bewusst weg (Units gestoppt, 30 s Cooldown zwischen
+Versuchen) — ob nebenläufiger Zugriff die fehlende Zutat ist, bleibt darum
+offen. Nach drei Runden ohne eine einzige Reproduktion wurde die Messung
+eingestellt (sinkender Grenzertrag) zugunsten der Umsetzung unten, die
+unabhängig von der Ursache wirkt.
 
-Als Abnahmekriterium muss der reale Wechsel
-`balanced-performance` nach `power-saver` sowohl mit `LOCK=1` als auch mit
-`LOCK=0` mit einem einzigen Helper-Aufruf gelingen. PPD, CPU-EPP,
-Providerprofil und State müssen danach konsistent bleiben.
+## Umsetzung
+
+Statt die Ursache weiter zu jagen, behandelt `tools/eppmode-helper` ein nicht
+bestätigtes `platform_profile` jetzt als **Teilerfolg** statt als
+Gesamtfehler: `apply_platform_profile()` gibt `2` zurück, wenn EPP und
+`power-profiles-daemon` korrekt gesetzt sind, aber der Provider den
+Zielwert nicht innerhalb des (deutlich verkürzten) Poll-Budgets bestätigt.
+Der Zustand landet in einem neuen State-Feld `PLATFORM_PENDING`; der Modus
+gilt als aktiv (die Kachel zeigt ihn korrekt an, da sie ausschließlich EPP
+liest), `LOCK` bleibt unangetastet, und der ohnehin alle 10 Sekunden laufende
+`reassert` zieht das offene Plattformprofil im Hintergrund nach — gebremst
+durch eine neue Cooldown-Datei (`/var/lib/eppmode/.platform-write`,
+Standard 30 s), damit wiederholte Reassert-Läufe DYTC nicht mit
+Schreibversuchen bombardieren. Menü zeigt „Plattformprofil ausstehend“, wenn
+`PLATFORM_PENDING` gesetzt ist.
+
+Damit ist `power-saver` unabhängig vom ungeklärten DYTC-Verhalten sofort
+nutzbar: EPP greift immer, das Plattformprofil zieht nach, sobald DYTC es
+zulässt.

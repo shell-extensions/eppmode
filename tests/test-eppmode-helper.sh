@@ -72,8 +72,8 @@ assert_eq() {
 }
 
 state_text() {
-  printf 'SELECTED=%s\nAPPLIED=%s\nLOCK=%s\nSAFETY=%s\n' \
-    "$1" "$2" "$3" "$4"
+  printf 'SELECTED=%s\nAPPLIED=%s\nLOCK=%s\nSAFETY=%s\nPLATFORM_PENDING=%s\n' \
+    "$1" "$2" "$3" "$4" "${5:-}"
 }
 
 write_state() {
@@ -137,10 +137,11 @@ run_helper() {
     --bind "${test_root}/var" /var \
     --setenv PATH "${test_root}/bin:/usr/bin:/bin" \
     --setenv EPPMODE_PLATFORM_POLL_DELAY "${EPPMODE_PLATFORM_POLL_DELAY:-0}" \
-    --setenv EPPMODE_PLATFORM_MAX_POLLS "${EPPMODE_PLATFORM_MAX_POLLS:-32}" \
-    --setenv EPPMODE_PLATFORM_STABLE_READS "${EPPMODE_PLATFORM_STABLE_READS:-3}" \
-    --setenv EPPMODE_PLATFORM_RETRY_EVERY "${EPPMODE_PLATFORM_RETRY_EVERY:-8}" \
-    --setenv EPPMODE_PLATFORM_MAX_WRITES "${EPPMODE_PLATFORM_MAX_WRITES:-3}" \
+    --setenv EPPMODE_PLATFORM_MAX_POLLS "${EPPMODE_PLATFORM_MAX_POLLS:-6}" \
+    --setenv EPPMODE_PLATFORM_STABLE_READS "${EPPMODE_PLATFORM_STABLE_READS:-2}" \
+    --setenv EPPMODE_PLATFORM_RETRY_EVERY "${EPPMODE_PLATFORM_RETRY_EVERY:-4}" \
+    --setenv EPPMODE_PLATFORM_MAX_WRITES "${EPPMODE_PLATFORM_MAX_WRITES:-1}" \
+    --setenv EPPMODE_PLATFORM_MIN_INTERVAL "${EPPMODE_PLATFORM_MIN_INTERVAL:-0}" \
     "${helper}" "$@"
 }
 
@@ -201,19 +202,18 @@ test_missing_platform_profile_is_optional() {
     "$(cat "${test_root}/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference")"
 }
 
-test_unstable_platform_profile_fails_without_state_update() {
+test_unstable_platform_profile_marks_platform_pending() {
   setup_fixture
   rm "${test_root}/sys/firmware/acpi/platform_profile"
   ln -s /dev/null "${test_root}/sys/firmware/acpi/platform_profile"
-  local before
-  before="$(cat "${test_root}/var/lib/eppmode/state")"
 
-  if run_helper rw set power-saver >/dev/null 2>&1; then
-    fail 'unstable platform_profile unexpectedly succeeded'
-  fi
+  run_helper rw set power-saver
 
-  assert_eq 'state after unstable platform_profile' "${before}" \
+  assert_eq 'state with pending platform profile' \
+    "$(state_text power-saver power-saver 0 0 low-power)" \
     "$(cat "${test_root}/var/lib/eppmode/state")"
+  assert_eq 'EPP still applied despite pending platform profile' power \
+    "$(cat "${test_root}/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference")"
 }
 
 test_provider_profile_is_authoritative_over_legacy_interface() {
@@ -286,11 +286,10 @@ test_delayed_provider_convergence_succeeds_with_one_set() {
   done
 }
 
-test_transient_provider_match_does_not_succeed() {
+test_transient_provider_match_marks_platform_pending() {
   setup_fixture
   setup_class_profile 0 balanced
-  local before watcher
-  before="$(<"${test_root}/var/lib/eppmode/state")"
+  local watcher
 
   (
     for _ in {1..200}; do
@@ -309,32 +308,122 @@ test_transient_provider_match_does_not_succeed() {
   ) &
   watcher=$!
 
-  if EPPMODE_PLATFORM_POLL_DELAY=0.05 \
+  # STABLE_READS is deliberately kept at 3 here (rather than the shorter
+  # production default) so this test's ~60ms revert window can never
+  # accidentally look "stable" regardless of poll timing luck.
+  EPPMODE_PLATFORM_POLL_DELAY=0.05 \
     EPPMODE_PLATFORM_MAX_POLLS=8 \
+    EPPMODE_PLATFORM_STABLE_READS=3 \
     EPPMODE_PLATFORM_RETRY_EVERY=4 \
-    run_helper provider-ro set power-saver >/dev/null 2>&1; then
-    fail 'transient provider match unexpectedly succeeded'
-  fi
+    run_helper provider-ro set power-saver
   wait "${watcher}" || fail 'transient provider watcher did not run'
 
-  assert_eq 'state after transient provider match' "${before}" \
+  assert_eq 'state after transient provider match' \
+    "$(state_text power-saver power-saver 0 0 low-power)" \
     "$(<"${test_root}/var/lib/eppmode/state")"
 }
 
-test_permanent_provider_mismatch_times_out() {
+test_permanent_provider_mismatch_marks_platform_pending() {
   setup_fixture
   setup_class_profile 0 balanced
-  local before
-  before="$(<"${test_root}/var/lib/eppmode/state")"
 
-  if EPPMODE_PLATFORM_MAX_POLLS=6 \
+  EPPMODE_PLATFORM_MAX_POLLS=6 \
     EPPMODE_PLATFORM_RETRY_EVERY=2 \
-    run_helper provider-ro set power-saver >/dev/null 2>&1; then
-    fail 'permanent provider mismatch unexpectedly succeeded'
-  fi
+    run_helper provider-ro set power-saver
 
-  assert_eq 'state after permanent provider mismatch' "${before}" \
+  assert_eq 'state after permanent provider mismatch' \
+    "$(state_text power-saver power-saver 0 0 low-power)" \
     "$(<"${test_root}/var/lib/eppmode/state")"
+  assert_eq 'provider remains unmatched' balanced \
+    "$(<"${test_root}/sys/class/platform-profile/platform-profile-0/profile")"
+}
+
+test_locked_reassert_resolves_pending_platform_profile() {
+  setup_fixture
+  for cpu in cpu0 cpu1; do
+    printf '%s\n' power \
+      > "${test_root}/sys/devices/system/cpu/${cpu}/cpufreq/energy_performance_preference"
+  done
+  write_state power-saver power-saver 1 0 low-power
+
+  run_helper rw reassert
+
+  assert_eq 'pending resolved after successful reassert' \
+    "$(state_text power-saver power-saver 1 0)" \
+    "$(cat "${test_root}/var/lib/eppmode/state")"
+  assert_eq 'platform_profile converged' low-power \
+    "$(cat "${test_root}/sys/firmware/acpi/platform_profile")"
+}
+
+test_repeated_locked_reassert_reports_pending_once() {
+  setup_fixture
+  setup_class_profile 0 balanced
+  write_state power-saver power-saver 1 0
+  local output state_inode_before state_inode_after
+
+  output="$(run_helper provider-ro reassert 2>&1)"
+  if [[ "${output}" != *"Platform profile for power-saver is pending"* ]]; then
+    fail 'first reassert did not report the pending platform profile'
+  fi
+  assert_eq 'state after first pending reassert' \
+    "$(state_text power-saver power-saver 1 0 low-power)" \
+    "$(cat "${test_root}/var/lib/eppmode/state")"
+
+  state_inode_before="$(stat -c %i "${test_root}/var/lib/eppmode/state")"
+  output="$(run_helper provider-ro reassert 2>&1)"
+  state_inode_after="$(stat -c %i "${test_root}/var/lib/eppmode/state")"
+
+  if [[ "${output}" == *"Platform profile for power-saver is pending"* ]]; then
+    fail 'second reassert repeated the pending report'
+  fi
+  assert_eq 'state file untouched by repeated pending reassert' \
+    "${state_inode_before}" "${state_inode_after}"
+}
+
+test_unlocked_reassert_keeps_own_pending_platform_profile() {
+  setup_fixture
+  setup_class_profile 0 balanced
+  for cpu in cpu0 cpu1; do
+    printf '%s\n' power \
+      > "${test_root}/sys/devices/system/cpu/${cpu}/cpufreq/energy_performance_preference"
+  done
+  write_state power-saver power-saver 0 0 low-power
+
+  run_helper provider-ro reassert
+
+  assert_eq 'state keeps power-saver despite unresolved platform_profile' \
+    "$(state_text power-saver power-saver 0 0 low-power)" \
+    "$(cat "${test_root}/var/lib/eppmode/state")"
+  assert_eq 'EPP remains power, not reinterpreted as balanced drift' power \
+    "$(cat "${test_root}/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference")"
+}
+
+test_platform_write_cooldown_skips_retry() {
+  setup_fixture
+  setup_class_profile 0 balanced
+  write_state power-saver power-saver 1 0
+  local elapsed_first elapsed_second start end
+
+  start=$(date +%s%N)
+  EPPMODE_PLATFORM_POLL_DELAY=0.2 EPPMODE_PLATFORM_MAX_POLLS=5 \
+    EPPMODE_PLATFORM_MIN_INTERVAL=60 \
+    run_helper provider-ro reassert
+  end=$(date +%s%N)
+  elapsed_first=$(( (end - start) / 1000000 ))
+
+  start=$(date +%s%N)
+  EPPMODE_PLATFORM_POLL_DELAY=0.2 EPPMODE_PLATFORM_MAX_POLLS=5 \
+    EPPMODE_PLATFORM_MIN_INTERVAL=60 \
+    run_helper provider-ro reassert
+  end=$(date +%s%N)
+  elapsed_second=$(( (end - start) / 1000000 ))
+
+  if (( elapsed_first < 900 )); then
+    fail "first reassert finished too quickly to have polled (${elapsed_first}ms)"
+  fi
+  if (( elapsed_second > 400 )); then
+    fail "second reassert did not skip the cooldown (${elapsed_second}ms)"
+  fi
 }
 
 test_direct_provider_fallback_without_aggregate() {
@@ -476,11 +565,12 @@ test_matching_locked_state_requires_no_hardware_write() {
 test_failed_locked_reassert_disables_lock_and_preserves_safety() {
   setup_fixture
   write_state performance balanced-powersave 1 1
-  rm "${test_root}/sys/firmware/acpi/platform_profile"
-  ln -s /dev/null "${test_root}/sys/firmware/acpi/platform_profile"
 
-  if run_helper rw reassert >/dev/null 2>&1; then
-    fail 'unstable locked reassert unexpectedly succeeded'
+  # A read-only /sys makes the EPP write itself fail (a hard error), unlike
+  # the platform_profile-only mismatches tested above, which now count as
+  # a recoverable pending state rather than a failure.
+  if run_helper ro reassert >/dev/null 2>&1; then
+    fail 'unenforceable locked reassert unexpectedly succeeded'
   fi
 
   assert_eq 'state after failed locked reassert' \
@@ -491,12 +581,10 @@ test_failed_locked_reassert_disables_lock_and_preserves_safety() {
 test_failed_safety_only_reassert_is_reported() {
   setup_fixture
   write_state performance balanced-powersave 0 1
-  rm "${test_root}/sys/firmware/acpi/platform_profile"
-  ln -s /dev/null "${test_root}/sys/firmware/acpi/platform_profile"
   local output
 
-  if output="$(run_helper rw reassert 2>&1)"; then
-    fail 'unstable safety-only reassert unexpectedly succeeded'
+  if output="$(run_helper ro reassert 2>&1)"; then
+    fail 'unenforceable safety-only reassert unexpectedly succeeded'
   fi
 
   if [[ "${output}" != *"Battery safety power mode could not be enforced"* ]]; then
@@ -639,12 +727,16 @@ tests=(
   test_failed_write_preserves_state
   test_unsupported_epp_preserves_state
   test_missing_platform_profile_is_optional
-  test_unstable_platform_profile_fails_without_state_update
+  test_unstable_platform_profile_marks_platform_pending
   test_provider_profile_is_authoritative_over_legacy_interface
   test_legacy_coordinator_sets_provider_profile
   test_delayed_provider_convergence_succeeds_with_one_set
-  test_transient_provider_match_does_not_succeed
-  test_permanent_provider_mismatch_times_out
+  test_transient_provider_match_marks_platform_pending
+  test_permanent_provider_mismatch_marks_platform_pending
+  test_locked_reassert_resolves_pending_platform_profile
+  test_repeated_locked_reassert_reports_pending_once
+  test_unlocked_reassert_keeps_own_pending_platform_profile
+  test_platform_write_cooldown_skips_retry
   test_direct_provider_fallback_without_aggregate
   test_active_ppd_is_synchronized_to_base_profile
   test_matching_ppd_profile_is_not_written_again
