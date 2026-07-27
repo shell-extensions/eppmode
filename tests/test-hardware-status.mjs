@@ -16,7 +16,8 @@ assert.ok(end > start, 'hardware detection block is malformed');
 const context = {};
 vm.runInNewContext(
     `${source.slice(start, end)}
-globalThis.detectHardwareMode = detectHardwareMode;`,
+globalThis.detectHardwareMode = detectHardwareMode;
+globalThis.isUnexpectedUnlock = isUnexpectedUnlock;`,
     context);
 
 const detect = context.detectHardwareMode;
@@ -33,4 +34,15 @@ const cases = [
 for (const [eppValues, expected] of cases)
     assert.equal(detect(eppValues), expected);
 
-console.log(`${cases.length} hardware status tests passed`);
+const unlockCases = [
+    [[true, false, null], true],
+    [[true, false, false], false],
+    [[true, true, null], false],
+    [[false, false, null], false],
+    [[undefined, false, null], false],
+];
+
+for (const [args, expected] of unlockCases)
+    assert.equal(context.isUnexpectedUnlock(...args), expected);
+
+console.log(`${cases.length + unlockCases.length} hardware status and lock tests passed`);

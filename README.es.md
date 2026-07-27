@@ -17,7 +17,10 @@ causados por el firmware o las teclas ACPI sin afectar a la selección manual,
 y una **protección de batería**. Esta fuerza como mínimo el modo
 `Equilibrado-Ahorro` al bajar del 20 % durante la descarga, independientemente
 del bloqueo. Un modo `Ahorro de energía` seleccionado manualmente permanece
-activo.
+activo. Al cambiar el bloqueo, el menú permanece abierto y la regla se guarda
+inmediatamente. Si falla el siguiente intento de aplicación, el bloqueo vuelve
+a desactivarse en lugar de indicar una protección que el hardware no pudo
+mantener.
 
 Sucesor de
 [`power-saver-epp-fix`](https://github.com/shell-extensions/power-saver-epp-fix);
@@ -38,6 +41,16 @@ plataforma permanezcan coherentes. Con el bloqueo activado, revierte cualquier
 desviación. Con el bloqueo desactivado, adopta los cambios externos:
 `balanced` se convierte en `Equilibrado-Rendimiento`, salvo que las CPU ya
 indiquen `balance_power`.
+En kernels recientes, las interfaces específicas de cada proveedor bajo
+`/sys/class/platform-profile/` son la fuente autoritativa para la lectura y la
+verificación. Para escribir, el ayudante prefiere la interfaz agregada antigua
+`/sys/firmware/acpi/platform_profile` como vía coordinada por el kernel y solo
+recurre a la escritura directa del proveedor cuando esa interfaz no está
+disponible o rechaza la solicitud. Como el firmware DYTC de ThinkPad puede
+confirmar un perfil de forma asíncrona, el ayudante espera hasta ocho segundos
+y exige tres lecturas consecutivas coincidentes del proveedor. En lugar de
+alternar rápidamente entre ambas interfaces, envía como máximo dos reintentos
+espaciados.
 
 El instalador mantiene activo `power-profiles-daemon`, pero lo reinicia con su
 controlador `platform_profile` bloqueado mediante la protección ya probada en

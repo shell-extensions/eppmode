@@ -17,6 +17,10 @@ Firmware oder ACPI-Hotkeys verhindert, ohne die manuelle Auswahl
 einzuschränken, und ein **Akku-Sicherheitsnetz**. Dieses erzwingt beim Entladen
 unter 20 % mindestens den Modus `Ausgeglichen-Sparsam`, unabhängig vom
 Sperrzustand. Ein manuell gewählter Modus `Energie sparen` bleibt aktiv.
+Beim Umschalten der Sperre bleibt das Menü geöffnet und die Regel wird sofort
+gespeichert. Schlägt der nächste Durchsetzungsversuch fehl, wird die Sperre
+wieder deaktiviert, statt einen Schutz anzuzeigen, den die Hardware nicht
+einhalten konnte.
 
 Nachfolger von
 [`power-saver-epp-fix`](https://github.com/shell-extensions/power-saver-epp-fix);
@@ -37,6 +41,16 @@ Plattformprofil konsistent bleiben. Bei aktiver Sperre wird eine Abweichung
 zurückgesetzt. Bei gelöster Sperre wird eine externe Plattformänderung
 übernommen: `balanced` wird zu `Ausgeglichen-Leistung`, sofern die CPUs nicht
 bereits `balance_power` melden.
+Auf neueren Kerneln sind die providerspezifischen Schnittstellen unter
+`/sys/class/platform-profile/` für Lesen und Prüfung maßgeblich. Zum Schreiben
+bevorzugt der Helfer den alten Sammelpfad
+`/sys/firmware/acpi/platform_profile` als vom Kernel koordinierten Weg und
+greift nur dann direkt auf die Providerdateien zurück, wenn dieser Sammelpfad
+nicht verfügbar ist oder den Schreibzugriff ablehnt. Da ThinkPad-DYTC-Firmware
+ein Profil verzögert bestätigen kann, wartet der Helfer bis zu acht Sekunden
+und verlangt drei aufeinanderfolgende passende Providerwerte. Statt schnell
+zwischen beiden Schnittstellen zu wechseln, sendet er höchstens zwei weitere
+Schreibimpulse mit Abstand.
 
 Der Installer lässt `power-profiles-daemon` aktiv, startet ihn aber mit
 blockiertem `platform_profile`-Treiber neu. Dazu verwendet er den bereits in
@@ -44,6 +58,11 @@ blockiertem `platform_profile`-Treiber neu. Dazu verwendet er den bereits in
 grobes Profil, wartet dessen CPU-Schreibvorgang ab und setzt und prüft danach
 den exakten EPP- und Plattformzustand aus der Tabelle. Die Deinstallation
 entfernt den Guard und startet PPD wieder normal.
+
+## Diagnoseberichte
+
+- [Offener Fehler: Power-Saver-Wechsel scheitert am
+  ThinkPad-Plattformprofil](docs/power-saver-platform-profile-diagnose.de.md)
 
 ## Installation
 

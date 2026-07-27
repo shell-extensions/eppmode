@@ -85,6 +85,10 @@ sync_power_profiles_daemon() {
 	fi
 
 	target_profile="$(mode_ppd_profile "$1")"
+	current_profile="$(powerprofilesctl get 2>/dev/null || true)"
+	if [ "$current_profile" = "$target_profile" ]; then
+		return 0
+	fi
 	if ! powerprofilesctl set "$target_profile" >/dev/null 2>&1; then
 		report_error "Failed to synchronize power-profiles-daemon to $target_profile"
 		return 1
@@ -142,40 +146,182 @@ apply_epp() {
 	[ "$failed" -eq 0 ]
 }
 
-apply_platform_profile() {
-	platform_profile_file=/sys/firmware/acpi/platform_profile
-	platform_profile_choices_file=/sys/firmware/acpi/platform_profile_choices
+platform_profile_files() {
+	found=0
+	for profile_file in /sys/class/platform-profile/platform-profile-*/profile; do
+		[ -e "$profile_file" ] || continue
+		found=1
+		printf '%s\n' "$profile_file"
+	done
 
-	[ -e "$platform_profile_file" ] || return 0
-	[ -r "$platform_profile_choices_file" ] || return 0
-	if [ ! -w "$platform_profile_file" ]; then
-		report_error "platform_profile exists but is not writable"
+	if [ "$found" -eq 0 ] && [ -e /sys/firmware/acpi/platform_profile ]; then
+		printf '%s\n' /sys/firmware/acpi/platform_profile
+	fi
+}
+
+platform_profile_choices_file() {
+	case "$1" in
+		/sys/class/platform-profile/*/profile)
+			printf '%s\n' "${1%/profile}/choices"
+			;;
+		/sys/firmware/acpi/platform_profile)
+			printf '%s\n' /sys/firmware/acpi/platform_profile_choices
+			;;
+	esac
+}
+
+platform_profiles_support() (
+	target_platform="$1"
+	profile_files="$2"
+
+	for profile_file in $profile_files; do
+		choices_file="$(platform_profile_choices_file "$profile_file")"
+		[ -r "$choices_file" ] || continue
+		choices="$(cat "$choices_file" 2>/dev/null || true)"
+		has_word "$choices" "$target_platform" && exit 0
+	done
+	exit 1
+)
+
+platform_profiles_match() (
+	target_platform="$1"
+	profile_files="$2"
+	supported=0
+
+	for profile_file in $profile_files; do
+		choices_file="$(platform_profile_choices_file "$profile_file")"
+		[ -r "$choices_file" ] || continue
+		choices="$(cat "$choices_file" 2>/dev/null || true)"
+		has_word "$choices" "$target_platform" || continue
+		supported=1
+		current_platform="$(cat "$profile_file" 2>/dev/null || true)"
+		[ "$current_platform" = "$target_platform" ] || exit 1
+	done
+	[ "$supported" -eq 1 ]
+)
+
+platform_profile_summary() (
+	profile_files="$1"
+	separator=
+
+	for profile_file in $profile_files; do
+		profile_name="$(cat "${profile_file%/profile}/name" 2>/dev/null ||
+			printf '%s' "$profile_file")"
+		current_platform="$(cat "$profile_file" 2>/dev/null || printf unreadable)"
+		printf '%s%s=%s' "$separator" "$profile_name" "$current_platform"
+		separator=', '
+	done
+)
+
+write_direct_platform_profiles() {
+	target_platform="$1"
+	profile_files="$2"
+	supported=0
+	failed=0
+
+	for profile_file in $profile_files; do
+		choices_file="$(platform_profile_choices_file "$profile_file")"
+		[ -r "$choices_file" ] || continue
+		choices="$(cat "$choices_file" 2>/dev/null || true)"
+		has_word "$choices" "$target_platform" || continue
+		supported=1
+
+		if [ ! -w "$profile_file" ]; then
+			report_error "$profile_file exists but is not writable"
+			failed=1
+			continue
+		fi
+		if ! printf '%s\n' "$target_platform" > "$profile_file" 2>/dev/null; then
+			report_error "Failed to set $profile_file to $target_platform"
+			failed=1
+		fi
+	done
+
+	[ "$supported" -eq 1 ] && [ "$failed" -eq 0 ]
+}
+
+write_aggregate_platform_profile() {
+	target_platform="$1"
+	legacy_profile=/sys/firmware/acpi/platform_profile
+	legacy_choices=/sys/firmware/acpi/platform_profile_choices
+
+	[ -w "$legacy_profile" ] && [ -r "$legacy_choices" ] || return 1
+	choices="$(cat "$legacy_choices" 2>/dev/null || true)"
+	has_word "$choices" "$target_platform" || return 1
+	printf '%s\n' "$target_platform" > "$legacy_profile" 2>/dev/null
+}
+
+apply_platform_profile() {
+	target_platform="$(mode_platform_profile "$1")"
+	profile_files="$(platform_profile_files)"
+	[ -n "$profile_files" ] || return 0
+
+	platform_profiles_support "$target_platform" "$profile_files" || return 0
+	platform_profiles_match "$target_platform" "$profile_files" && return 0
+
+	poll_delay="${EPPMODE_PLATFORM_POLL_DELAY:-${EPPMODE_PLATFORM_DELAY:-0.25}}"
+	max_polls="${EPPMODE_PLATFORM_MAX_POLLS:-32}"
+	stable_reads_required="${EPPMODE_PLATFORM_STABLE_READS:-3}"
+	retry_every="${EPPMODE_PLATFORM_RETRY_EVERY:-8}"
+	max_writes="${EPPMODE_PLATFORM_MAX_WRITES:-3}"
+	for retry_value in "$max_polls" "$stable_reads_required" "$retry_every" "$max_writes"; do
+		case "$retry_value" in
+			""|*[!0-9]*) report_error "Invalid platform_profile retry configuration"; return 1 ;;
+		esac
+	done
+	if [ "$max_polls" -eq 0 ] ||
+		[ "$stable_reads_required" -eq 0 ] ||
+		[ "$retry_every" -eq 0 ] ||
+		[ "$max_writes" -eq 0 ]; then
+		report_error "Invalid platform_profile retry configuration"
 		return 1
 	fi
 
-	target_platform="$(mode_platform_profile "$1")"
-	choices="$(cat "$platform_profile_choices_file" 2>/dev/null || true)"
-	if ! has_word "$choices" "$target_platform"; then
-		logger -t eppmode "platform_profile '$target_platform' is not available: $choices" || true
-		return 0
-	fi
-
-	attempt=1
-	while [ "$attempt" -le 3 ]; do
-		current_platform="$(cat "$platform_profile_file" 2>/dev/null || true)"
-		if [ "$current_platform" != "$target_platform" ]; then
-			if ! printf '%s\n' "$target_platform" > "$platform_profile_file" 2>/dev/null; then
-				report_error "Failed to set platform_profile to $target_platform"
+	# Use one route for the whole transaction. Repeatedly alternating between
+	# the aggregate and provider files queues competing ThinkPad DYTC completion
+	# events. Provider class files remain authoritative for verification.
+	write_route=direct
+	case "$profile_files" in
+		*/sys/class/platform-profile/*)
+			if write_aggregate_platform_profile "$target_platform"; then
+				write_route=aggregate
+			elif ! write_direct_platform_profiles "$target_platform" "$profile_files"; then
 				return 1
 			fi
+			;;
+		*)
+			write_direct_platform_profiles "$target_platform" "$profile_files" || return 1
+			;;
+	esac
+	writes=1
+	stable_reads=0
+	poll=1
+	while [ "$poll" -le "$max_polls" ]; do
+		sleep "$poll_delay"
+		if platform_profiles_match "$target_platform" "$profile_files"; then
+			stable_reads=$((stable_reads + 1))
+			[ "$stable_reads" -lt "$stable_reads_required" ] || return 0
+		else
+			stable_reads=0
+			if [ $((poll % retry_every)) -eq 0 ] && [ "$writes" -lt "$max_writes" ]; then
+				if [ "$write_route" = aggregate ]; then
+					if ! write_aggregate_platform_profile "$target_platform"; then
+						write_route=direct
+						write_direct_platform_profiles "$target_platform" "$profile_files" ||
+							return 1
+					fi
+				else
+					write_direct_platform_profiles "$target_platform" "$profile_files" ||
+						return 1
+				fi
+				writes=$((writes + 1))
+			fi
 		fi
-		sleep "${EPPMODE_PLATFORM_DELAY:-0.2}"
-		current_platform="$(cat "$platform_profile_file" 2>/dev/null || true)"
-		[ "$current_platform" = "$target_platform" ] && return 0
-		attempt=$((attempt + 1))
+		poll=$((poll + 1))
 	done
 
-	report_error "platform_profile did not retain $target_platform after 3 attempts"
+	actual_profiles="$(platform_profile_summary "$profile_files")"
+	report_error "platform_profile did not stabilize at $target_platform within the configured timeout ($actual_profiles)"
 	return 1
 }
 
@@ -209,9 +355,34 @@ read_epp_mode() {
 }
 
 read_platform_profile() {
-	platform_profile_file=/sys/firmware/acpi/platform_profile
-	[ -r "$platform_profile_file" ] || return 0
-	cat "$platform_profile_file" 2>/dev/null
+	profile_files="$(platform_profile_files)"
+	[ -n "$profile_files" ] || return 0
+
+	found=0
+	actual_platform=
+	for profile_file in $profile_files; do
+		[ -r "$profile_file" ] || continue
+		current_platform="$(cat "$profile_file" 2>/dev/null)" || return 1
+		if [ "$found" -eq 1 ] && [ "$current_platform" != "$actual_platform" ]; then
+			return 1
+		fi
+		found=1
+		actual_platform="$current_platform"
+	done
+	[ "$found" -eq 1 ] || return 0
+	printf '%s\n' "$actual_platform"
+}
+
+hardware_matches_mode() {
+	expected_mode="$1"
+	actual_epp_mode="$(read_epp_mode 2>/dev/null || true)"
+	[ "$actual_epp_mode" = "$expected_mode" ] || return 1
+
+	if ! actual_platform="$(read_platform_profile)"; then
+		return 1
+	fi
+	expected_platform="$(mode_platform_profile "$expected_mode")"
+	[ -z "$actual_platform" ] || [ "$actual_platform" = "$expected_platform" ]
 }
 
 mode_for_unlocked_hardware() {
@@ -280,7 +451,6 @@ cmd_lock() {
 	selected="$(current_or_default SELECTED balanced-performance)"
 	applied="$(current_or_default APPLIED balanced-performance)"
 	safety="$(current_or_default SAFETY 0)"
-	apply_hardware "$applied"
 	write_state "$selected" "$applied" 1 "$safety"
 }
 
@@ -298,12 +468,24 @@ cmd_reassert() {
 	safety="$(current_or_default SAFETY 0)"
 
 	if [ "$lock" = "1" ] || [ "$safety" = "1" ]; then
-		apply_hardware "$applied"
-		return
+		hardware_matches_mode "$applied" && return 0
+		if apply_hardware "$applied"; then
+			return 0
+		fi
+		if [ "$lock" = "1" ]; then
+			write_state "$selected" "$applied" 0 "$safety"
+			report_error "Lock disabled because the applied power mode could not be enforced"
+		else
+			report_error "Battery safety power mode could not be enforced"
+		fi
+		return 1
 	fi
 
 	epp_mode="$(read_epp_mode 2>/dev/null || true)"
-	platform_profile="$(read_platform_profile)"
+	if ! platform_profile="$(read_platform_profile)"; then
+		report_error "Could not read platform_profile while reconciling unlocked hardware state"
+		return 1
+	fi
 	target="$(mode_for_unlocked_hardware "$epp_mode" "$platform_profile" 2>/dev/null || true)"
 	if [ -z "$target" ]; then
 		report_error "Could not reconcile unlocked hardware state"

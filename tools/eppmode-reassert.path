@@ -1,8 +1,9 @@
 [Unit]
-Description=Watch ACPI platform_profile for EPP Power Modes drift
+Description=Watch platform profiles for EPP Power Modes drift
 
 [Path]
 PathChanged=/sys/firmware/acpi/platform_profile
+PathChanged=/sys/class/platform-profile/platform-profile-0/profile
 Unit=eppmode-reassert.service
 
 [Install]

@@ -110,7 +110,8 @@ if command -v systemctl >/dev/null 2>&1; then
   if systemctl cat "${PPD_UNIT}" >/dev/null 2>&1; then
     sudo systemctl restart "${PPD_UNIT}"
   fi
-  sudo systemctl enable --now eppmode-restore.service
+  sudo systemctl enable eppmode-restore.service
+  sudo systemctl start eppmode-restore.service
   sudo systemctl enable --now eppmode-reassert.path eppmode-reassert.timer
   sudo systemctl enable --now eppmode-battery.timer
 else

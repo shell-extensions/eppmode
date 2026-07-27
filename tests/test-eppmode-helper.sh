@@ -30,9 +30,23 @@ exit 3
 EOF
 cat > "${test_root}/bin/powerprofilesctl" <<'EOF'
 #!/bin/sh
-[ "$1" = "set" ] || exit 2
-[ "${MOCK_PPD_FAIL:-0}" != "1" ] || exit 1
-printf '%s\n' "$2" > /var/lib/eppmode/ppd-profile
+case "$1" in
+  get)
+    if [ -r /var/lib/eppmode/ppd-profile ]; then
+      cat /var/lib/eppmode/ppd-profile
+    else
+      printf '%s\n' "${MOCK_PPD_CURRENT:-unknown}"
+    fi
+    ;;
+  set)
+    [ "${MOCK_PPD_FAIL:-0}" != "1" ] || exit 1
+    printf '%s\n' "$2" > /var/lib/eppmode/ppd-profile
+    : > /var/lib/eppmode/ppd-set-called
+    ;;
+  *)
+    exit 2
+    ;;
+esac
 EOF
 printf '#!/bin/sh\nexit 0\n' > "${test_root}/bin/logger"
 chmod +x \
@@ -86,12 +100,29 @@ setup_fixture() {
   write_state balanced-performance balanced-performance 0 0
 }
 
+setup_class_profile() {
+  local index="${1:-0}"
+  local profile="${2:-balanced}"
+  local class_dir="${test_root}/sys/class/platform-profile/platform-profile-${index}"
+  mkdir -p "${class_dir}"
+  printf '%s\n' 'low-power balanced performance' > "${class_dir}/choices"
+  printf '%s\n' "${profile}" > "${class_dir}/profile"
+  printf 'mock-platform-profile-%s\n' "${index}" > "${class_dir}/name"
+}
+
 run_helper() {
   local sys_mode="$1"
   shift
   local bind_option=--bind
+  local -a extra_bind_args=()
   if [[ "${sys_mode}" == ro ]]; then
     bind_option=--ro-bind
+  elif [[ "${sys_mode}" == provider-ro ]]; then
+    extra_bind_args=(
+      --ro-bind
+      "${test_root}/sys/class/platform-profile/platform-profile-0/profile"
+      /sys/class/platform-profile/platform-profile-0/profile
+    )
   fi
 
   bwrap \
@@ -102,9 +133,14 @@ run_helper() {
     --ro-bind / / \
     --dev /dev \
     "${bind_option}" "${test_root}/sys" /sys \
+    "${extra_bind_args[@]}" \
     --bind "${test_root}/var" /var \
     --setenv PATH "${test_root}/bin:/usr/bin:/bin" \
-    --setenv EPPMODE_PLATFORM_DELAY 0 \
+    --setenv EPPMODE_PLATFORM_POLL_DELAY "${EPPMODE_PLATFORM_POLL_DELAY:-0}" \
+    --setenv EPPMODE_PLATFORM_MAX_POLLS "${EPPMODE_PLATFORM_MAX_POLLS:-32}" \
+    --setenv EPPMODE_PLATFORM_STABLE_READS "${EPPMODE_PLATFORM_STABLE_READS:-3}" \
+    --setenv EPPMODE_PLATFORM_RETRY_EVERY "${EPPMODE_PLATFORM_RETRY_EVERY:-8}" \
+    --setenv EPPMODE_PLATFORM_MAX_WRITES "${EPPMODE_PLATFORM_MAX_WRITES:-3}" \
     "${helper}" "$@"
 }
 
@@ -180,6 +216,141 @@ test_unstable_platform_profile_fails_without_state_update() {
     "$(cat "${test_root}/var/lib/eppmode/state")"
 }
 
+test_provider_profile_is_authoritative_over_legacy_interface() {
+  setup_fixture
+  setup_class_profile 0 low-power
+  write_state power-saver power-saver 1 0
+  printf '%s\n' power > "${test_root}/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference"
+  printf '%s\n' power > "${test_root}/sys/devices/system/cpu/cpu1/cpufreq/energy_performance_preference"
+
+  run_helper ro reassert
+
+  assert_eq 'provider platform_profile' low-power \
+    "$(cat "${test_root}/sys/class/platform-profile/platform-profile-0/profile")"
+  assert_eq 'unchanged legacy platform_profile' balanced \
+    "$(cat "${test_root}/sys/firmware/acpi/platform_profile")"
+  assert_eq 'provider-backed state' \
+    "$(state_text power-saver power-saver 1 0)" \
+    "$(cat "${test_root}/var/lib/eppmode/state")"
+}
+
+test_legacy_coordinator_sets_provider_profile() {
+  setup_fixture
+  setup_class_profile 0 balanced
+  rm "${test_root}/sys/class/platform-profile/platform-profile-0/profile"
+  ln -s ../../../firmware/acpi/platform_profile \
+    "${test_root}/sys/class/platform-profile/platform-profile-0/profile"
+
+  run_helper rw set power-saver
+
+  assert_eq 'coordinated provider platform_profile' low-power \
+    "$(cat "${test_root}/sys/class/platform-profile/platform-profile-0/profile")"
+  assert_eq 'coordinated legacy platform_profile' low-power \
+    "$(cat "${test_root}/sys/firmware/acpi/platform_profile")"
+  assert_eq 'coordinated state' \
+    "$(state_text power-saver power-saver 0 0)" \
+    "$(cat "${test_root}/var/lib/eppmode/state")"
+}
+
+test_delayed_provider_convergence_succeeds_with_one_set() {
+  local lock watcher
+  for lock in 0 1; do
+    setup_fixture
+    setup_class_profile 0 balanced
+    write_state balanced-performance balanced-performance "${lock}" 0
+
+    (
+      for _ in {1..200}; do
+        if [[ "$(<"${test_root}/sys/firmware/acpi/platform_profile")" == low-power ]]; then
+          sleep 0.15
+          printf '%s\n' low-power \
+            > "${test_root}/sys/class/platform-profile/platform-profile-0/profile"
+          exit 0
+        fi
+        sleep 0.01
+      done
+      exit 1
+    ) &
+    watcher=$!
+
+    EPPMODE_PLATFORM_POLL_DELAY=0.05 \
+      EPPMODE_PLATFORM_MAX_POLLS=40 \
+      run_helper provider-ro set power-saver
+    wait "${watcher}" || fail 'delayed provider watcher did not converge'
+
+    assert_eq "delayed provider profile with lock=${lock}" low-power \
+      "$(<"${test_root}/sys/class/platform-profile/platform-profile-0/profile")"
+    assert_eq "delayed state with lock=${lock}" \
+      "$(state_text power-saver power-saver "${lock}" 0)" \
+      "$(<"${test_root}/var/lib/eppmode/state")"
+  done
+}
+
+test_transient_provider_match_does_not_succeed() {
+  setup_fixture
+  setup_class_profile 0 balanced
+  local before watcher
+  before="$(<"${test_root}/var/lib/eppmode/state")"
+
+  (
+    for _ in {1..200}; do
+      if [[ "$(<"${test_root}/sys/firmware/acpi/platform_profile")" == low-power ]]; then
+        sleep 0.07
+        printf '%s\n' low-power \
+          > "${test_root}/sys/class/platform-profile/platform-profile-0/profile"
+        sleep 0.06
+        printf '%s\n' balanced \
+          > "${test_root}/sys/class/platform-profile/platform-profile-0/profile"
+        exit 0
+      fi
+      sleep 0.01
+    done
+    exit 1
+  ) &
+  watcher=$!
+
+  if EPPMODE_PLATFORM_POLL_DELAY=0.05 \
+    EPPMODE_PLATFORM_MAX_POLLS=8 \
+    EPPMODE_PLATFORM_RETRY_EVERY=4 \
+    run_helper provider-ro set power-saver >/dev/null 2>&1; then
+    fail 'transient provider match unexpectedly succeeded'
+  fi
+  wait "${watcher}" || fail 'transient provider watcher did not run'
+
+  assert_eq 'state after transient provider match' "${before}" \
+    "$(<"${test_root}/var/lib/eppmode/state")"
+}
+
+test_permanent_provider_mismatch_times_out() {
+  setup_fixture
+  setup_class_profile 0 balanced
+  local before
+  before="$(<"${test_root}/var/lib/eppmode/state")"
+
+  if EPPMODE_PLATFORM_MAX_POLLS=6 \
+    EPPMODE_PLATFORM_RETRY_EVERY=2 \
+    run_helper provider-ro set power-saver >/dev/null 2>&1; then
+    fail 'permanent provider mismatch unexpectedly succeeded'
+  fi
+
+  assert_eq 'state after permanent provider mismatch' "${before}" \
+    "$(<"${test_root}/var/lib/eppmode/state")"
+}
+
+test_direct_provider_fallback_without_aggregate() {
+  setup_fixture
+  setup_class_profile 0 balanced
+  rm -rf "${test_root}/sys/firmware/acpi"
+
+  run_helper rw set power-saver
+
+  assert_eq 'direct provider fallback profile' low-power \
+    "$(<"${test_root}/sys/class/platform-profile/platform-profile-0/profile")"
+  assert_eq 'direct provider fallback state' \
+    "$(state_text power-saver power-saver 0 0)" \
+    "$(<"${test_root}/var/lib/eppmode/state")"
+}
+
 test_active_ppd_is_synchronized_to_base_profile() {
   local mode expected
   while read -r mode expected; do
@@ -195,6 +366,20 @@ balanced-powersave balanced
 balanced-performance balanced
 performance performance
 EOF
+}
+
+test_matching_ppd_profile_is_not_written_again() {
+  setup_fixture
+  printf '%s\n' power > "${test_root}/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference"
+  printf '%s\n' power > "${test_root}/sys/devices/system/cpu/cpu1/cpufreq/energy_performance_preference"
+  printf '%s\n' low-power > "${test_root}/sys/firmware/acpi/platform_profile"
+  printf '%s\n' power-saver > "${test_root}/var/lib/eppmode/ppd-profile"
+
+  EPPMODE_PPD_DELAY=0 MOCK_PPD_ACTIVE=1 run_helper rw set power-saver
+
+  if [[ -e "${test_root}/var/lib/eppmode/ppd-set-called" ]]; then
+    fail 'matching PPD profile was written again'
+  fi
 }
 
 test_ppd_sync_failure_preserves_hardware_and_state() {
@@ -262,6 +447,80 @@ test_locked_platform_drift_restores_power_saver() {
     "$(cat "${test_root}/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference")"
   assert_eq 'locked power-saver platform' low-power \
     "$(cat "${test_root}/sys/firmware/acpi/platform_profile")"
+}
+
+test_lock_only_updates_persisted_state() {
+  setup_fixture
+
+  run_helper ro lock
+
+  assert_eq 'state-only lock' \
+    "$(state_text balanced-performance balanced-performance 1 0)" \
+    "$(cat "${test_root}/var/lib/eppmode/state")"
+}
+
+test_matching_locked_state_requires_no_hardware_write() {
+  setup_fixture
+  write_state power-saver power-saver 1 0
+  printf '%s\n' power > "${test_root}/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference"
+  printf '%s\n' power > "${test_root}/sys/devices/system/cpu/cpu1/cpufreq/energy_performance_preference"
+  printf '%s\n' low-power > "${test_root}/sys/firmware/acpi/platform_profile"
+
+  run_helper ro reassert
+
+  assert_eq 'unchanged matching lock state' \
+    "$(state_text power-saver power-saver 1 0)" \
+    "$(cat "${test_root}/var/lib/eppmode/state")"
+}
+
+test_failed_locked_reassert_disables_lock_and_preserves_safety() {
+  setup_fixture
+  write_state performance balanced-powersave 1 1
+  rm "${test_root}/sys/firmware/acpi/platform_profile"
+  ln -s /dev/null "${test_root}/sys/firmware/acpi/platform_profile"
+
+  if run_helper rw reassert >/dev/null 2>&1; then
+    fail 'unstable locked reassert unexpectedly succeeded'
+  fi
+
+  assert_eq 'state after failed locked reassert' \
+    "$(state_text performance balanced-powersave 0 1)" \
+    "$(cat "${test_root}/var/lib/eppmode/state")"
+}
+
+test_failed_safety_only_reassert_is_reported() {
+  setup_fixture
+  write_state performance balanced-powersave 0 1
+  rm "${test_root}/sys/firmware/acpi/platform_profile"
+  ln -s /dev/null "${test_root}/sys/firmware/acpi/platform_profile"
+  local output
+
+  if output="$(run_helper rw reassert 2>&1)"; then
+    fail 'unstable safety-only reassert unexpectedly succeeded'
+  fi
+
+  if [[ "${output}" != *"Battery safety power mode could not be enforced"* ]]; then
+    fail 'safety-only reassert did not report its enforcement failure'
+  fi
+  assert_eq 'state after failed safety-only reassert' \
+    "$(state_text performance balanced-powersave 0 1)" \
+    "$(cat "${test_root}/var/lib/eppmode/state")"
+}
+
+test_unlocked_platform_read_failure_is_reported() {
+  setup_fixture
+  setup_class_profile 0 balanced
+  rm "${test_root}/sys/class/platform-profile/platform-profile-0/profile"
+  mkdir "${test_root}/sys/class/platform-profile/platform-profile-0/profile"
+  local output
+
+  if output="$(run_helper ro reassert 2>&1)"; then
+    fail 'unreadable unlocked platform profile unexpectedly succeeded'
+  fi
+
+  if [[ "${output}" != *"Could not read platform_profile while reconciling unlocked hardware state"* ]]; then
+    fail 'unlocked platform read failure was not reported'
+  fi
 }
 
 test_safety_state_blocks_unlocked_performance_drift() {
@@ -381,11 +640,23 @@ tests=(
   test_unsupported_epp_preserves_state
   test_missing_platform_profile_is_optional
   test_unstable_platform_profile_fails_without_state_update
+  test_provider_profile_is_authoritative_over_legacy_interface
+  test_legacy_coordinator_sets_provider_profile
+  test_delayed_provider_convergence_succeeds_with_one_set
+  test_transient_provider_match_does_not_succeed
+  test_permanent_provider_mismatch_times_out
+  test_direct_provider_fallback_without_aggregate
   test_active_ppd_is_synchronized_to_base_profile
+  test_matching_ppd_profile_is_not_written_again
   test_ppd_sync_failure_preserves_hardware_and_state
   test_unlocked_platform_drift_adopts_balanced_performance
   test_unlocked_balanced_power_epp_remains_exact
   test_locked_platform_drift_restores_power_saver
+  test_lock_only_updates_persisted_state
+  test_matching_locked_state_requires_no_hardware_write
+  test_failed_locked_reassert_disables_lock_and_preserves_safety
+  test_failed_safety_only_reassert_is_reported
+  test_unlocked_platform_read_failure_is_reported
   test_safety_state_blocks_unlocked_performance_drift
   test_upower_failure_preserves_safety
   test_upower_reply_engages_safety

@@ -15,7 +15,10 @@ energy-performance-preference (EPP) states:
 Plus a **Lock** switch that blocks automatic (firmware/ACPI-hotkey) drift
 without affecting manual selection, and a **battery safety net** that
 enforces at least `Balanced-Saver` below 20% while discharging, unaffected
-by Lock. A manually selected `Power Saver` remains active.
+by Lock. A manually selected `Power Saver` remains active. Toggling Lock
+keeps the menu open and stores the policy immediately. If the next enforcement
+attempt fails, Lock is disabled again instead of claiming protection that the
+hardware could not provide.
 
 Successor to
 [`power-saver-epp-fix`](https://github.com/shell-extensions/power-saver-epp-fix);
@@ -35,6 +38,14 @@ When the interface is available, the helper verifies that EPP and platform
 profile stay consistent. With Lock enabled, drift is reverted. With Lock
 disabled, external platform drift is adopted: `balanced` maps to
 `Balanced-Performance` unless the CPUs already expose `balance_power`.
+On newer kernels, provider-specific interfaces below
+`/sys/class/platform-profile/` are authoritative for reading and verification.
+The helper prefers the legacy `/sys/firmware/acpi/platform_profile` aggregate
+as the kernel-coordinated write path and falls back to direct provider writes
+only when that aggregate is unavailable or rejects the request. ThinkPad DYTC
+firmware may confirm a profile asynchronously, so the helper waits up to eight
+seconds and requires three consecutive matching provider reads. It sends at
+most two spaced retries instead of rapidly alternating between both interfaces.
 
 The installer keeps `power-profiles-daemon` active but restarts it with its
 `platform_profile` driver blocked, using the guard proven by

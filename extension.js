@@ -91,6 +91,12 @@ function detectHardwareMode(eppValues) {
     return EPP_TO_MODE.get(epp) ?? 'unknown';
 }
 
+function isUnexpectedUnlock(previousLockState, currentLockState, pendingLockState) {
+    return previousLockState === true &&
+        currentLockState === false &&
+        pendingLockState === null;
+}
+
 function parseStateFile(text) {
     const state = {};
     for (const line of text.split('\n')) {
@@ -104,6 +110,13 @@ function parseStateFile(text) {
     }
     return state;
 }
+
+const PersistentPopupSwitchMenuItem = GObject.registerClass(
+class PersistentPopupSwitchMenuItem extends PopupMenu.PopupSwitchMenuItem {
+    activate(_event) {
+        this.toggle();
+    }
+});
 
 const EppMenu = GObject.registerClass(
 class EppMenu extends QuickSettings.QuickMenuToggle {
@@ -142,7 +155,7 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        this._lockItem = new PopupMenu.PopupSwitchMenuItem(_('Lock'), false);
+        this._lockItem = new PersistentPopupSwitchMenuItem(_('Lock'), false);
         this._lockChangedId = this._lockItem.connect('toggled', (item, state) => this._setLock(state));
         this.menu.addMenuItem(this._lockItem);
 
@@ -150,6 +163,8 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
         this.menu.addSettingsAction(_('Power Settings'), 'gnome-power-panel.desktop');
 
         this._busy = false;
+        this._pendingLockState = null;
+        this._knownLockState = undefined;
         this._monitor = null;
         this._monitorChangedId = 0;
         this._refreshSourceId = 0;
@@ -364,7 +379,16 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
 
     _refreshFromSystem({ viaClick = false } = {}) {
         const state = this._readStateFile();
-        this._setLockIndicator(state?.LOCK === '1');
+        const locked = state?.LOCK === '1';
+        if (this._pendingLockState === null) {
+            if (isUnexpectedUnlock(this._knownLockState, locked, this._pendingLockState)) {
+                Main.notify(
+                    _('Lock disabled'),
+                    _('The lock was disabled because the power mode could not be enforced.'));
+            }
+            this._knownLockState = locked;
+            this._setLockIndicator(locked);
+        }
         // EPP values are written CPU by CPU, followed by platform_profile.
         // Avoid exposing that brief intermediate combination as "Mixed";
         // _applyMode() reconciles from hardware after the helper exits.
@@ -377,6 +401,13 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
         this._lockItem.block_signal_handler(this._lockChangedId);
         this._lockItem.setToggleState(locked);
         this._lockItem.unblock_signal_handler(this._lockChangedId);
+    }
+
+    _setBusy(busy) {
+        this._busy = busy;
+        for (const item of this._modeItems.values())
+            item.setSensitive(!busy);
+        this._lockItem.setSensitive(!busy);
     }
 
     _setAppliedMode(id, { viaClick = false } = {}) {
@@ -430,13 +461,13 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
     _applyMode(id, { viaClick = false } = {}) {
         if (this._busy)
             return;
-        this._busy = true;
+        this._setBusy(true);
 
         this._runHelperCommand(['set', id]).then(() => {
-            this._busy = false;
+            this._setBusy(false);
             this._refreshFromSystem({ viaClick });
         }).catch(error => {
-            this._busy = false;
+            this._setBusy(false);
             if (!error?.handled)
                 Main.notify(_('Error'), _('Could not apply the power mode.'));
             console.error('EPP Power Modes: error applying mode', error);
@@ -445,11 +476,27 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
     }
 
     _setLock(state) {
-        this._runHelperCommand([state ? 'lock' : 'unlock']).catch(error => {
+        if (this._busy) {
+            this._setLockIndicator(this._knownLockState ?? !state);
+            return;
+        }
+
+        this._pendingLockState = state;
+        this._setBusy(true);
+        this._runHelperCommand([state ? 'lock' : 'unlock']).then(() => {
+            const wasManualUnlock = this._pendingLockState === false;
+            this._pendingLockState = null;
+            this._setBusy(false);
+            if (wasManualUnlock)
+                this._knownLockState = false;
+            this._refreshFromSystem();
+        }).catch(error => {
+            this._pendingLockState = null;
+            this._setBusy(false);
             if (!error?.handled)
                 Main.notify(_('Error'), _('Could not change the lock state.'));
             console.error('EPP Power Modes: error setting lock', error);
-            this._setLockIndicator(!state);
+            this._refreshFromSystem();
         });
     }
 

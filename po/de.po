@@ -11,7 +11,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: eppmode 1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-07-27 03:38+0200\n"
+"POT-Creation-Date: 2026-07-27 04:54+0200\n"
 "PO-Revision-Date: 2026-07-26 22:49+0200\n"
 "Last-Translator: EPP Power Modes contributors\n"
 "Language-Team: German\n"
@@ -71,45 +71,55 @@ msgctxt "hardware status"
 msgid "Unknown"
 msgstr "Unbekannt"
 
-#: extension.js:112
+#: extension.js:125
 msgid "Power"
 msgstr "Energie"
 
-#: extension.js:145
+#: extension.js:158
 msgid "Lock"
 msgstr "Sperren"
 
-#: extension.js:150
+#: extension.js:163
 msgid "Power Settings"
 msgstr "Energieeinstellungen"
 
-#: extension.js:223
+#: extension.js:238
 msgid "Setup required"
 msgstr "Einrichtung erforderlich"
 
-#: extension.js:223
+#: extension.js:238
 msgid "Run the install script once to allow passwordless access to the helper."
 msgstr ""
 "Führen Sie das Installationsskript einmal aus, um passwortlosen Zugriff auf "
 "den Helfer zu erlauben."
 
-#: extension.js:229 extension.js:441 extension.js:450
+#: extension.js:244 extension.js:472 extension.js:497
 msgid "Error"
 msgstr "Fehler"
 
-#: extension.js:229
+#: extension.js:244
 msgid "sudo was not found on this system."
 msgstr "sudo wurde auf diesem System nicht gefunden."
 
-#: extension.js:441
+#: extension.js:386
+msgid "Lock disabled"
+msgstr "Sperre deaktiviert"
+
+#: extension.js:387
+msgid "The lock was disabled because the power mode could not be enforced."
+msgstr ""
+"Die Sperre wurde deaktiviert, weil der Energiemodus nicht durchgesetzt "
+"werden konnte."
+
+#: extension.js:472
 msgid "Could not apply the power mode."
 msgstr "Der Energiemodus konnte nicht angewendet werden."
 
-#: extension.js:450
+#: extension.js:497
 msgid "Could not change the lock state."
 msgstr "Der Sperrzustand konnte nicht geändert werden."
 
-#: extension.js:482
+#: extension.js:529
 msgid ""
 "This extension needs root access to control the CPU energy-performance-"
 "preference."
@@ -117,16 +127,16 @@ msgstr ""
 "Diese Erweiterung benötigt Root-Zugriff, um die CPU-Energie-Leistungs-"
 "Voreinstellung zu steuern."
 
-#: extension.js:483
+#: extension.js:530
 msgid "Run the install script once:"
 msgstr "Führen Sie das Installationsskript einmal aus:"
 
-#: extension.js:485
+#: extension.js:532
 msgid "Then restart GNOME Shell or disable/enable the extension."
 msgstr ""
 "Starten Sie anschließend GNOME Shell neu oder deaktivieren/aktivieren Sie "
 "die Erweiterung."
 
-#: extension.js:488
+#: extension.js:535
 msgid "Close"
 msgstr "Schließen"
