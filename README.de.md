@@ -61,9 +61,10 @@ vorausgehenden EPP-/PPD-Schreibvorgängen (siehe
 für die Messung dahinter). Statt deswegen den gesamten Moduswechsel scheitern
 zu lassen, behandelt der Helfer ein unbestätigtes Plattformprofil als
 ausstehend: EPP und `power-profiles-daemon` bleiben wirksam, die Kachel zeigt
-weiterhin den gewählten Modus, im Menü erscheint „Plattformprofil ausstehend",
-und der Hintergrund-Reassert versucht es weiter (mit Cooldown, um die
-Firmware nicht zu bombardieren), bis die Hardware bestätigt.
+anstelle des Moduseigenen Icons ein Synchronisierungssymbol, im Menü
+erscheint „Plattformprofil ausstehend", und der Hintergrund-Reassert
+versucht es weiter (mit Cooldown, um die Firmware nicht zu bombardieren),
+bis die Hardware bestätigt.
 
 Der Installer lässt `power-profiles-daemon` aktiv, startet ihn aber mit
 blockiertem `platform_profile`-Treiber neu. Dazu verwendet er den bereits in

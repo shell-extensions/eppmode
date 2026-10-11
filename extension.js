@@ -20,6 +20,13 @@ const EPP_FILE_NAME = 'energy_performance_preference';
 const HARDWARE_POLL_SECONDS = 5;
 const TEXT_DECODER = new TextDecoder('utf-8');
 
+// Rolling click-cycle window: each click resets it. Inside the window we keep
+// stepping in the same direction; outside it, the next click jumps back to
+// whatever was active before the last change (see _cycleMode()).
+const CYCLE_WINDOW_US = 10_000_000;
+const DIRECTION_TOWARD_SAVER = -1;
+const DIRECTION_TOWARD_PERFORMANCE = 1;
+
 // Row directly below hotspot's own fixed TARGET_POSITION=4 (hotspot@yurij.de),
 // left column of a 2-column grid (even index). hotspotIndex+1 (odd) landed in
 // hotspot's own row instead — same row, not the next one. loadshed positions
@@ -60,6 +67,8 @@ const MODES = [
         tileLabel: () => pgettext('tile subtitle', 'Performance'),
     },
 ];
+
+const MODE_IDS = MODES.map(mode => mode.id);
 
 const EPP_TO_MODE = new Map([
     ['power', 'power-saver'],
@@ -104,6 +113,60 @@ function isUnexpectedUnlock(previousLockState, currentLockState, pendingLockStat
     return previousLockState === true &&
         currentLockState === false &&
         pendingLockState === null;
+}
+
+// Pure decision function behind the tile's click-cycle. Given where we are
+// now (currentId), what was active immediately before that (previousId), the
+// cycle direction carried over from the last click, and whether we're still
+// inside the 10s rolling window since the last click, decides the next mode
+// and the direction to carry forward.
+//
+// Contract for the caller (see _cycleMode()):
+// - modeIds is MODE_IDS, in fixed on-screen order (power-saver first,
+//   performance last) — the two ends of this array are where the ping-pong
+//   direction reversal happens.
+// - currentId may be a mode id, or something not in modeIds at all (the tile
+//   also displays synthetic hardware states 'mixed'/'unknown' — see
+//   detectHardwareMode() above). Recover from that by treating it like "no
+//   current mode": land on modeIds[0] and resume stepping upward from there.
+// - previousId is whatever _setAppliedMode() recorded as the mode active
+//   right before the current one (null if there isn't one, e.g. fresh
+//   after login, or if it no longer names a real mode).
+// - inWindow === false means: this is the "first click" of a new sequence.
+//   If previousId is a valid, different mode, jump back to it — mirroring
+//   GNOME's own PowerProfilesToggle — and derive the new direction from
+//   which way that jump went. Otherwise (no usable previousId) fall back to
+//   a single step in the carried-over direction.
+// - inWindow === true means: keep stepping in `direction`. Falling off
+//   either end of modeIds reverses direction (ping-pong) instead of
+//   wrapping around.
+//
+function computeCycleTarget(modeIds, { currentId, previousId, direction, inWindow }) {
+    if (modeIds.length < 2)
+        return { targetId: currentId, direction };
+
+    const currentIndex = modeIds.indexOf(currentId);
+    if (currentIndex === -1)
+        return { targetId: modeIds[0], direction: DIRECTION_TOWARD_PERFORMANCE };
+
+    if (!inWindow) {
+        const previousIndex = modeIds.indexOf(previousId);
+        if (previousIndex !== -1 && previousIndex !== currentIndex) {
+            return {
+                targetId: modeIds[previousIndex],
+                direction: previousIndex < currentIndex
+                    ? DIRECTION_TOWARD_SAVER
+                    : DIRECTION_TOWARD_PERFORMANCE,
+            };
+        }
+    }
+
+    const steppedIndex = currentIndex + direction;
+    if (steppedIndex < 0 || steppedIndex >= modeIds.length) {
+        const reversed = -direction;
+        return { targetId: modeIds[currentIndex + reversed], direction: reversed };
+    }
+    return { targetId: modeIds[steppedIndex], direction };
 }
 
 function parseStateFile(text) {
@@ -170,7 +233,7 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
             box.add_child(tick);
             menuItem._tick = tick;
             menuItem.actor.add_child(box);
-            menuItem.connect('activate', () => this._applyMode(mode.id));
+            menuItem.connect('activate', () => this._selectModeFromMenu(mode.id));
             modesSection.addMenuItem(menuItem);
             this._modeItems.set(mode.id, menuItem);
         }
@@ -193,7 +256,12 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
         this._refreshSourceId = 0;
         this._appliedId = undefined;
         this._previousId = null;
-        this._lastChangeWasClick = false;
+        this._cycleDirection = DIRECTION_TOWARD_SAVER;
+        this._cycleTargetId = null;
+        this._lastClickTimeUs = 0;
+        this._queuedModeId = null;
+        this._inFlightModeId = null;
+        this._platformPending = false;
 
         this._clickedId = this.connect('clicked', () => this._cycleMode());
         this._menuOpenId = this.menu.connect('open-state-changed', (menu, isOpen) => {
@@ -400,7 +468,7 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
             });
     }
 
-    _refreshFromSystem({ viaClick = false } = {}) {
+    _refreshFromSystem() {
         const state = this._readStateFile();
         const locked = state?.LOCK === '1';
         if (this._pendingLockState === null) {
@@ -418,11 +486,31 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
         // _applyMode() reconciles from hardware after the helper exits.
         if (this._busy)
             return;
-        this._setAppliedMode(this._readHardwareMode(), { viaClick });
+        this._setAppliedMode(this._readHardwareMode());
     }
 
     _setPlatformPending(pending) {
         this._platformPendingItem.visible = pending;
+        this._platformPending = pending;
+        if (this._appliedId !== undefined)
+            this._updateIcon();
+    }
+
+    // Swap in the same "syncing" icon already used for the menu's "Platform
+    // profile pending" row (tools/eppmode-helper: PLATFORM_PENDING) whenever
+    // the tile's own mode icon would otherwise be shown. Purely cosmetic —
+    // the click cycle in _cycleMode() ignores this entirely, since EPP and
+    // power-profiles-daemon are already correct in that state. Icon-only
+    // (rather than appending to the subtitle) because the German tile labels
+    // are already at the ~14-character budget documented in po/de.po.
+    _updateIcon() {
+        const mode = MODES.find(m => m.id === this._appliedId);
+        const presentation = mode ??
+            HARDWARE_STATUS_PRESENTATION[this._appliedId] ??
+            HARDWARE_STATUS_PRESENTATION.unknown;
+        const icon = this._platformPending ? 'emblem-synchronizing-symbolic' : presentation.icon;
+        this.iconName = icon;
+        this._indicator.icon_name = icon;
     }
 
     _setLockIndicator(locked) {
@@ -438,7 +526,7 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
         this._lockItem.setSensitive(!busy);
     }
 
-    _setAppliedMode(id, { viaClick = false } = {}) {
+    _setAppliedMode(id) {
         const mode = MODES.find(m => m.id === id);
         const presentation = mode ??
             HARDWARE_STATUS_PRESENTATION[id] ??
@@ -447,22 +535,18 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
             ? mode.id
             : (Object.hasOwn(HARDWARE_STATUS_PRESENTATION, id) ? id : 'unknown');
 
-        // Track what was active immediately before this change, and whether
-        // the change came from a tile click, so _cycleMode() can decide
-        // between "jump back to previous" and "keep cycling forward".
-        // Guarded on `!== undefined` so the very first sync at startup never
-        // records a bogus "previous" state.
+        // Track what was active immediately before this change, so the next
+        // "first click" of a new cycle sequence (see _cycleMode()) knows
+        // what to jump back to. Guarded on `!== undefined` so the very first
+        // sync at startup never records a bogus "previous" state.
         const changed = this._appliedId !== undefined && this._appliedId !== appliedId;
-        if (changed) {
+        if (changed)
             this._previousId = this._appliedId;
-            this._lastChangeWasClick = viaClick;
-        }
         this._appliedId = appliedId;
 
         for (const [modeId, item] of this._modeItems)
             item._tick.visible = modeId === appliedId;
-        this.iconName = presentation.icon;
-        this._indicator.icon_name = presentation.icon;
+        this._updateIcon();
         this.subtitle = presentation.tileLabel();
         this.menu.setHeader(presentation.icon, 'EPP Power Modes');
         // Mirror GNOME's own PowerProfilesToggle: highlighted only away from
@@ -470,37 +554,92 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
         this.checked = appliedId === 'power-saver' || appliedId === 'performance';
     }
 
-    // Click on the tile body: one step forward, wrapping around — unless the
-    // last change came from somewhere else (menu selection, external drift),
-    // in which case the first click jumps back to whatever was active before
-    // that, mirroring GNOME's own PowerProfilesToggle. A second click right
-    // after continues the forward cycle.
+    // Click on the tile body. Within a 10s rolling window since the last
+    // click, keep stepping in the same direction, reversing at either end
+    // (ping-pong) instead of wrapping around. The first click of a new
+    // sequence instead jumps back to whatever was active before the current
+    // mode — mirroring GNOME's own PowerProfilesToggle — and that jump's
+    // direction becomes the direction for any further clicks within the
+    // window. See computeCycleTarget() for the actual decision.
     _cycleMode() {
-        const currentIndex = MODES.findIndex(m => m.id === this._appliedId);
-        const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % MODES.length;
-        const sequentialNext = MODES[nextIndex].id;
-        const previousIsMode = MODES.some(mode => mode.id === this._previousId);
-        const target = !this._lastChangeWasClick && previousIsMode
-            ? this._previousId
-            : sequentialNext;
-        this._applyMode(target, { viaClick: true });
+        const now = GLib.get_monotonic_time();
+        const inWindow = this._lastClickTimeUs !== 0 &&
+            now - this._lastClickTimeUs < CYCLE_WINDOW_US;
+        this._lastClickTimeUs = now;
+
+        // A mode that is still being applied (from the menu or an earlier
+        // click) is the effective current state: _appliedId/_previousId only
+        // catch up once the helper has finished, and the mode it replaces is
+        // then the one to jump back to.
+        const pendingId = this._queuedModeId ?? this._inFlightModeId;
+
+        // Inside the window, count from the last click's target, not from
+        // hardware: a helper run may still be in flight, and fast clicking
+        // shouldn't get stuck on a stale sysfs read.
+        const currentId = inWindow && this._cycleTargetId !== null
+            ? this._cycleTargetId
+            : pendingId ?? this._appliedId;
+
+        const { targetId, direction } = computeCycleTarget(MODE_IDS, {
+            currentId,
+            previousId: pendingId !== null ? this._appliedId : this._previousId,
+            direction: this._cycleDirection,
+            inWindow,
+        });
+
+        this._cycleDirection = direction;
+        this._cycleTargetId = targetId;
+        this._applyMode(targetId);
     }
 
-    _applyMode(id, { viaClick = false } = {}) {
-        if (this._busy)
+    // A mode picked from the menu resets the cycle: the next tile click
+    // should again act like the "first click" of a new sequence (jump back
+    // to whatever was active before), even if a click happened moments ago.
+    _selectModeFromMenu(id) {
+        this._lastClickTimeUs = 0;
+        this._cycleTargetId = null;
+        this._applyMode(id);
+    }
+
+    _applyMode(id) {
+        if (this._busy) {
+            // Only the newest target matters: applying intermediate steps
+            // would just burn platform_profile writes against the helper's
+            // DYTC cooldown for states we're about to leave again.
+            this._queuedModeId = id;
             return;
+        }
         this._setBusy(true);
+        this._inFlightModeId = id;
 
         this._runHelperCommand(['set', id]).then(() => {
+            this._inFlightModeId = null;
             this._setBusy(false);
-            this._refreshFromSystem({ viaClick });
+            if (!this._runQueuedMode())
+                this._refreshFromSystem();
         }).catch(error => {
+            this._inFlightModeId = null;
             this._setBusy(false);
             if (!error?.handled)
                 Main.notify(_('Error'), _('Could not apply the power mode.'));
             console.error('EPP Power Modes: error applying mode', error);
-            this._refreshFromSystem();
+            // A queued mode is the user's latest intent, so try it instead of
+            // silently dropping it. A handled error (e.g. the setup dialog was
+            // opened) means the helper isn't usable: don't retry against it.
+            if (error?.handled)
+                this._queuedModeId = null;
+            if (!this._runQueuedMode())
+                this._refreshFromSystem();
         });
+    }
+
+    _runQueuedMode() {
+        if (this._queuedModeId === null)
+            return false;
+        const queued = this._queuedModeId;
+        this._queuedModeId = null;
+        this._applyMode(queued);
+        return true;
     }
 
     _setLock(state) {
@@ -565,6 +704,9 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
     }
 
     destroy() {
+        // Prevents a late _runHelperCommand() promise callback from starting
+        // another helper run after this menu item is gone.
+        this._queuedModeId = null;
         if (this._refreshSourceId) {
             GLib.Source.remove(this._refreshSourceId);
             this._refreshSourceId = 0;

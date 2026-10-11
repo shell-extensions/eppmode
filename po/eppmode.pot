@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: eppmode 1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-07-27 13:09+0200\n"
+"POT-Creation-Date: 2026-07-30 21:16+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,118 +17,118 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: extension.js:41
+#: extension.js:48
 msgctxt "power mode"
 msgid "Power Saver"
 msgstr ""
 
-#: extension.js:42
+#: extension.js:49
 msgctxt "tile subtitle"
 msgid "Saver"
 msgstr ""
 
-#: extension.js:47
+#: extension.js:54
 msgctxt "power mode"
 msgid "Balanced-Saver"
 msgstr ""
 
-#: extension.js:48
+#: extension.js:55
 msgctxt "tile subtitle"
 msgid "Balanced −"
 msgstr ""
 
-#: extension.js:53
+#: extension.js:60
 msgctxt "power mode"
 msgid "Balanced-Performance"
 msgstr ""
 
-#: extension.js:54
+#: extension.js:61
 msgctxt "tile subtitle"
 msgid "Balanced +"
 msgstr ""
 
-#: extension.js:59
+#: extension.js:66
 msgctxt "power mode"
 msgid "Performance"
 msgstr ""
 
-#: extension.js:60
+#: extension.js:67
 msgctxt "tile subtitle"
 msgid "Performance"
 msgstr ""
 
-#: extension.js:74
+#: extension.js:83
 msgctxt "hardware status"
 msgid "Mixed"
 msgstr ""
 
-#: extension.js:78
+#: extension.js:87
 msgctxt "hardware status"
 msgid "Unknown"
 msgstr ""
 
-#: extension.js:134
+#: extension.js:197
 msgid "Power"
 msgstr ""
 
-#: extension.js:146
+#: extension.js:209
 msgid "Platform profile pending"
 msgstr ""
 
-#: extension.js:181
+#: extension.js:244
 msgid "Lock"
 msgstr ""
 
-#: extension.js:186
+#: extension.js:249
 msgid "Power Settings"
 msgstr ""
 
-#: extension.js:261
+#: extension.js:328
 msgid "Setup required"
 msgstr ""
 
-#: extension.js:261
+#: extension.js:328
 msgid "Run the install script once to allow passwordless access to the helper."
 msgstr ""
 
-#: extension.js:267 extension.js:500 extension.js:525
+#: extension.js:334 extension.js:615 extension.js:649
 msgid "Error"
 msgstr ""
 
-#: extension.js:267
+#: extension.js:334
 msgid "sudo was not found on this system."
 msgstr ""
 
-#: extension.js:409
+#: extension.js:476
 msgid "Lock disabled"
 msgstr ""
 
-#: extension.js:410
+#: extension.js:477
 msgid "The lock was disabled because the power mode could not be enforced."
 msgstr ""
 
-#: extension.js:500
+#: extension.js:615
 msgid "Could not apply the power mode."
 msgstr ""
 
-#: extension.js:525
+#: extension.js:649
 msgid "Could not change the lock state."
 msgstr ""
 
-#: extension.js:557
+#: extension.js:681
 msgid ""
 "This extension needs root access to control the CPU energy-performance-"
 "preference."
 msgstr ""
 
-#: extension.js:558
+#: extension.js:682
 msgid "Run the install script once:"
 msgstr ""
 
-#: extension.js:560
+#: extension.js:684
 msgid "Then restart GNOME Shell or disable/enable the extension."
 msgstr ""
 
-#: extension.js:563
+#: extension.js:687
 msgid "Close"
 msgstr ""

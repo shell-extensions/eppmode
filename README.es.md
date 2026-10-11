@@ -60,10 +60,11 @@ escrituras previas de EPP/PPD (véase
 [`docs/power-saver-platform-profile-diagnose.de.md`](docs/power-saver-platform-profile-diagnose.de.md)
 para la medición detrás de esto). En vez de hacer fallar todo el cambio de
 modo por eso, el ayudante trata un perfil de plataforma no confirmado como
-pendiente: EPP y `power-profiles-daemon` siguen vigentes, el icono sigue
-mostrando el modo seleccionado, en el menú aparece «Perfil de plataforma
-pendiente», y el reassert en segundo plano sigue reintentando (limitado para
-no saturar el firmware) hasta que el hardware lo confirme.
+pendiente: EPP y `power-profiles-daemon` siguen vigentes, el icono cambia a
+un símbolo de sincronización en lugar del icono propio del modo, en el menú
+aparece «Perfil de plataforma pendiente», y el reassert en segundo plano
+sigue reintentando (limitado para no saturar el firmware) hasta que el
+hardware lo confirme.
 
 El instalador mantiene activo `power-profiles-daemon`, pero lo reinicia con su
 controlador `platform_profile` bloqueado mediante la protección ya probada en

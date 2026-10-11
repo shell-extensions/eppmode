@@ -56,10 +56,10 @@ regardless of AC/battery state or proximity to the preceding EPP/PPD writes
 [`docs/power-saver-platform-profile-diagnose.de.md`](docs/power-saver-platform-profile-diagnose.de.md)
 for the measurement behind this). Rather than fail the whole mode change over
 that, the helper treats an unconfirmed platform profile as pending: EPP and
-`power-profiles-daemon` stay in effect, the tile still shows the selected
-mode, a **Platform profile pending** row appears in the menu, and the
-background reassert keeps retrying (rate-limited to avoid hammering the
-firmware) until the hardware confirms.
+`power-profiles-daemon` stay in effect, the tile swaps to a syncing icon in
+place of the selected mode's own icon, a **Platform profile pending** row
+appears in the menu, and the background reassert keeps retrying (rate-limited
+to avoid hammering the firmware) until the hardware confirms.
 
 The installer keeps `power-profiles-daemon` active but restarts it with its
 `platform_profile` driver blocked, using the guard proven by
