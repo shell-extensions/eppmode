@@ -261,7 +261,6 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
         this._lastClickTimeUs = 0;
         this._queuedModeId = null;
         this._inFlightModeId = null;
-        this._platformPending = false;
 
         this._clickedId = this.connect('clicked', () => this._cycleMode());
         this._menuOpenId = this.menu.connect('open-state-changed', (menu, isOpen) => {
@@ -491,24 +490,17 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
 
     _setPlatformPending(pending) {
         this._platformPendingItem.visible = pending;
-        this._platformPending = pending;
-        if (this._appliedId !== undefined)
-            this._updateIcon();
     }
 
-    // Swap in the same "syncing" icon already used for the menu's "Platform
-    // profile pending" row (tools/eppmode-helper: PLATFORM_PENDING) whenever
-    // the tile's own mode icon would otherwise be shown. Purely cosmetic —
-    // the click cycle in _cycleMode() ignores this entirely, since EPP and
-    // power-profiles-daemon are already correct in that state. Icon-only
-    // (rather than appending to the subtitle) because the German tile labels
-    // are already at the ~14-character budget documented in po/de.po.
-    _updateIcon() {
-        const mode = MODES.find(m => m.id === this._appliedId);
-        const presentation = mode ??
-            HARDWARE_STATUS_PRESENTATION[this._appliedId] ??
-            HARDWARE_STATUS_PRESENTATION.unknown;
-        const icon = this._platformPending ? 'emblem-synchronizing-symbolic' : presentation.icon;
+    // The tile and the panel icon always show the applied mode. An
+    // unconfirmed platform_profile (tools/eppmode-helper: PLATFORM_PENDING) is
+    // normal on hardware that rejects a tier — e.g. DYTC refusing
+    // "performance" — and used to replace the mode icon with a "syncing"
+    // emblem for as long as it lasted, which made the active mode
+    // unrecognisable. The pending state is only shown in the menu's
+    // "Platform profile pending" row; the click cycle in _cycleMode()
+    // ignores it, since EPP and power-profiles-daemon are already correct.
+    _updateIcon(icon) {
         this.iconName = icon;
         this._indicator.icon_name = icon;
     }
@@ -546,7 +538,7 @@ class EppMenu extends QuickSettings.QuickMenuToggle {
 
         for (const [modeId, item] of this._modeItems)
             item._tick.visible = modeId === appliedId;
-        this._updateIcon();
+        this._updateIcon(presentation.icon);
         this.subtitle = presentation.tileLabel();
         this.menu.setHeader(presentation.icon, 'EPP Power Modes');
         // Mirror GNOME's own PowerProfilesToggle: highlighted only away from
@@ -827,6 +819,16 @@ export default class EppModesExtension extends Extension {
         // fighting that repeatedly, wrap _sync() itself via InjectionManager
         // (the same mechanism Shell uses internally) to re-assert
         // visible = false right after every native sync.
+        //
+        // The panel icon needs the same treatment, one level up: the native
+        // Indicator binds its inner icon's `visible` to the toggle's `checked`,
+        // and SystemIndicator._syncIndicatorsVisible() then sets the whole
+        // indicator box visible again as soon as any profile other than
+        // "balanced" is active (power-saver, performance). Without this
+        // override the native profile icon shows up next to ours in exactly
+        // those modes — and shows power-profiles-daemon's profile, not ours.
+        // Overridden on the instance, since the method lives on the shared
+        // SystemIndicator prototype that every other indicator uses too.
         try {
             const native = Main.panel.statusArea.quickSettings._powerProfiles;
             if (native) {
@@ -834,10 +836,10 @@ export default class EppModesExtension extends Extension {
                 this._nativeIndicatorVisibility = native.visible;
                 this._nativeItemVisibility = new Map(
                     native.quickSettingsItems.map(item => [item, item.visible]));
+                this._injectionManager = new InjectionManager();
                 const [toggle] = native.quickSettingsItems;
                 if (toggle) {
                     this._nativePowerProfileItem = toggle;
-                    this._injectionManager = new InjectionManager();
                     this._injectionManager.overrideMethod(
                         toggle.constructor.prototype, '_sync', originalSync => {
                             return function () {
@@ -846,6 +848,13 @@ export default class EppModesExtension extends Extension {
                             };
                         });
                 }
+                this._injectionManager.overrideMethod(
+                    native, '_syncIndicatorsVisible', originalSync => {
+                        return function () {
+                            originalSync.call(this);
+                            this.visible = false;
+                        };
+                    });
                 native.visible = false;
                 for (const item of native.quickSettingsItems)
                     item.visible = false;
@@ -870,6 +879,7 @@ export default class EppModesExtension extends Extension {
             }
             try {
                 this._nativePowerProfileItem?._sync();
+                this._nativeToggle._syncIndicatorsVisible();
             } catch (error) {
                 console.error('EPP Power Modes: could not resync native power profile toggle', error);
             }
